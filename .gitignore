@@ -1,0 +1,5 @@
+node_modules/
+_pycache_/
+*.pyc
+.env
+meditrust.db
