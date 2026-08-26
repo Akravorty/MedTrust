@@ -4,3 +4,4 @@ _pycache_/
 .env
 meditrust.db
 venv/
+.venv/
