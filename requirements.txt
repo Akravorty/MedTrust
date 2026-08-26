@@ -69,7 +69,7 @@ narwhals==2.25.0
 nest-asyncio==1.6.0
 networkx==3.6.1
 numba==0.67.0
-numpy==2.5.2
+numpy==2.2.6
 openai==3.1.0
 openai-agents==0.21.0
 opencv-contrib-python==4.13.0.92
@@ -107,10 +107,10 @@ rpds-py==2026.6.3
 safehttpx==0.1.7
 safetensors==0.8.0
 scikit-learn==1.9.0
-scipy==1.18.1
+scipy==1.17.1
 seaborn==0.13.2
 semantic-version==2.10.0
-shap==0.52.0
+shap==0.51.0
 shellingham==1.5.4
 six==1.17.0
 slack_bolt==1.30.0
@@ -139,5 +139,5 @@ uvicorn==0.52.4
 wcwidth==0.7.0
 websockets==16.1.1
 Werkzeug==3.1.8
-xgboost==3.4.1
+xgboost==3.2.0
 yarl==1.24.5
