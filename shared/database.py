@@ -81,7 +81,8 @@ def init_db() -> None:
     app startup (see main.py).
     """
     from services.ledger.service import ensure_ledger_schema
-
+    from services.intake.service import ensure_intake_schema
     conn = get_connection()
     ensure_ledger_schema(conn)
+    ensure_intake_schema(conn)
     conn.commit()
