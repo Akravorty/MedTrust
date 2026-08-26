@@ -9,7 +9,7 @@ Two SIH production-enhancement beats live here:
    Before ever invoking Claude, this module evaluates the standard
    degradation metric programmatically:
 
-        reject_rate_3mo - reject_rate_6mo > 0.05
+       reject_rate_3mo - reject_rate_6mo > 0.05
 
    If the supplier has NOT degraded past that threshold, the agent returns
    `severity: "NONE"` immediately — no LLM call, no cost, no latency. The
@@ -59,7 +59,8 @@ MAX_TOKENS = 800
 
 DEGRADATION_THRESHOLD = 0.05
 
-_SUPPORTED_LANGS = {"hi": "Hindi", "or": "Odia"}
+# Added "en" to supported languages
+_SUPPORTED_LANGS = {"en": "English", "hi": "Hindi", "or": "Odia"}
 
 _VALID_SEVERITIES = {"NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
@@ -196,8 +197,6 @@ def _call_forced_tool(
         if getattr(block, "type", None) == "tool_use" and block.name == tool["name"]:
             return block.input or {}
 
-    # Forced tool_choice guarantees a matching tool_use block under normal
-    # operation; this is a defensive fallback for a malformed/empty response.
     logger.error("Forced tool call to '%s' did not return a matching tool_use block.", tool["name"])
     raise AgentUnavailableError(f"Anthropic API did not return the expected '{tool['name']}' tool call.")
 
@@ -251,10 +250,7 @@ def run_supplier_agent(
 
     Args:
         supplier_id: Supplier to evaluate.
-        lang: Optional 'hi' (Hindi) or 'or' (Odia). When set and the supplier
-            has degraded, draft_escalation_message is returned in that
-            language instead of English. Ignored when severity is NONE
-            (nothing to translate).
+        lang: Optional 'en' (English), 'hi' (Hindi), or 'or' (Odia).
         model: Override the Claude model used for both the analysis and
             translation calls.
 
@@ -263,7 +259,7 @@ def run_supplier_agent(
         LLM at all.
 
     Raises:
-        UnsupportedLanguageError: if `lang` is provided but not 'hi' or 'or'.
+        UnsupportedLanguageError: if `lang` is provided but not 'en', 'hi', or 'or'.
         AgentUnavailableError: on Anthropic connectivity/auth/rate-limit
             failures. Callers (router.py) should map this to HTTP 503.
     """
@@ -274,8 +270,9 @@ def run_supplier_agent(
 
     supplier_data = execute_tool("get_supplier_history", {"supplier_id": supplier_id})
 
-    if "error" in supplier_data:
-        logger.info("Supplier lookup failed for '%s': %s", supplier_id, supplier_data["error"])
+    if not supplier_data or "error" in supplier_data:
+        error_msg = supplier_data.get("error") if isinstance(supplier_data, dict) else "No data returned"
+        logger.info("Supplier lookup failed for '%s': %s", supplier_id, error_msg)
         return _not_found_alert(supplier_id)
 
     reject_rate_3mo = float(supplier_data["reject_rate_3mo"])
@@ -310,7 +307,8 @@ def run_supplier_agent(
 
     draft_escalation_message = str(analysis_input.get("draft_escalation_message", "")).strip()
 
-    if lang is not None and draft_escalation_message:
+    # Skip translation call when lang is English
+    if lang is not None and lang != "en" and draft_escalation_message:
         draft_escalation_message = _translate_message(
             client=client,
             text=draft_escalation_message,
