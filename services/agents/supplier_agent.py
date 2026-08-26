@@ -6,7 +6,7 @@ Person 4 (Agentic Layer) — Supplier Intelligence Agent for MediTrust.
 Two SIH production-enhancement beats live here:
 
 1. Supplier Trend Threshold Rule Engine:
-   Before ever invoking Claude, this module evaluates the standard
+   Before ever invoking Gemini, this module evaluates the standard
    degradation metric programmatically:
 
        reject_rate_3mo - reject_rate_6mo > 0.05
@@ -20,15 +20,11 @@ Two SIH production-enhancement beats live here:
 2. Multilingual Alert Engine:
    When a caller passes `lang="hi"` or `lang="or"`, the agent's English
    `draft_escalation_message` is translated into Hindi or Odia via a second,
-   narrowly-scoped Claude call. The shared `SupplierAlert` schema is
+   narrowly-scoped Gemini call. The shared `SupplierAlert` schema is
    untouched — `draft_escalation_message` remains a single string field;
    localization simply changes which language is in it.
 
-Both LLM calls use forced tool_choice against a single-purpose "submit_*"
-tool so the result is always structurally valid — never freeform text that
-needs post-hoc parsing.
-
-Error handling mirrors qa_agent.py: Anthropic SDK failures are caught and
+Error handling mirrors qa_agent.py: Google GenAI failures are caught and
 re-raised as `AgentUnavailableError` (imported from qa_agent to keep one
 exception type across the whole agent layer), for router.py to map to
 HTTP 503.
@@ -36,12 +32,15 @@ HTTP 503.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
+from pydantic import BaseModel, Field
 
-import anthropic
-from anthropic.types import MessageParam, ToolParam
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
 
 from shared.schemas import SupplierAlert
 from services.agents.tools import execute_tool
@@ -53,73 +52,38 @@ logger = logging.getLogger("meditrust.agents.supplier_agent")
 # Configuration
 # --------------------------------------------------------------------------- #
 
-DEFAULT_PRIMARY_MODEL = "claude-3-7-sonnet-20250219"
+DEFAULT_PRIMARY_MODEL = "gemini-2.5-flash"
 SUPPLIER_AGENT_MODEL = os.environ.get("SUPPLIER_AGENT_MODEL", DEFAULT_PRIMARY_MODEL)
-MAX_TOKENS = 800
 
 DEGRADATION_THRESHOLD = 0.05
 
-# Added "en" to supported languages
 _SUPPORTED_LANGS = {"en": "English", "hi": "Hindi", "or": "Odia"}
-
 _VALID_SEVERITIES = {"NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
 
 # --------------------------------------------------------------------------- #
-# Forced-output tools
+# Structured Response Schemas
 # --------------------------------------------------------------------------- #
 
-SUBMIT_ALERT_TOOL: ToolParam = {
-    "name": "submit_alert",
-    "description": (
-        "Submit your analysis of this supplier's quality degradation, exactly once, as "
-        "your final action. Base every claim strictly on the reject-rate figures and "
-        "flagged incidents provided — do not invent numbers."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "trend_description": {
-                "type": "string",
-                "description": "Plain-language description of the degradation trend, citing "
-                "the actual 3mo/6mo reject rates and any relevant flagged incidents.",
-            },
-            "severity": {
-                "type": "string",
-                "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
-                "description": "LOW: marginal degradation, monitor. MEDIUM: clear degradation, "
-                "warrants review. HIGH: significant degradation, warrants supplier hold. "
-                "CRITICAL: severe degradation with incident history, warrants immediate escalation.",
-            },
-            "suggested_action": {
-                "type": "string",
-                "description": "A concrete, specific next action for the procurement/QA team.",
-            },
-            "draft_escalation_message": {
-                "type": "string",
-                "description": "A ready-to-send escalation message (English) a QA officer could "
-                "forward to procurement leadership or the supplier, referencing the actual figures.",
-            },
-        },
-        "required": ["trend_description", "severity", "suggested_action", "draft_escalation_message"],
-    },
-}
+class AlertAnalysisResponse(BaseModel):
+    trend_description: str = Field(
+        description="Plain-language description of the degradation trend, citing actual reject rates."
+    )
+    severity: str = Field(
+        description="Severity levels: LOW, MEDIUM, HIGH, or CRITICAL."
+    )
+    suggested_action: str = Field(
+        description="Concrete, specific next action for procurement/QA team."
+    )
+    draft_escalation_message: str = Field(
+        description="Ready-to-send escalation message in English referencing actual figures."
+    )
 
-SUBMIT_TRANSLATION_TOOL: ToolParam = {
-    "name": "submit_translation",
-    "description": "Submit the translated escalation message exactly once, as your final action.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "translated_text": {
-                "type": "string",
-                "description": "The escalation message translated in full, preserving its "
-                "meaning, tone, and any figures/dates exactly as given.",
-            }
-        },
-        "required": ["translated_text"],
-    },
-}
+
+class TranslationResponse(BaseModel):
+    translated_text: str = Field(
+        description="The escalation message translated in full."
+    )
 
 
 ANALYSIS_SYSTEM_PROMPT = """You are the MediTrust Supplier Intelligence Agent. A programmatic \
@@ -129,17 +93,13 @@ characterize that degradation and draft an escalation, not to re-decide whether 
 
 Base every statement strictly on the supplier data provided to you in this message. Do not \
 invent figures, dates, or incidents that were not given to you. Reference the actual reject \
-rate numbers in both trend_description and draft_escalation_message.
-
-When ready, call the submit_alert tool exactly once with your analysis."""
+rate numbers in both trend_description and draft_escalation_message."""
 
 TRANSLATION_SYSTEM_PROMPT_TEMPLATE = """You are a professional {language} translator for a \
 hospital supply-chain quality system. Translate the escalation message you are given into \
 formal, professional {language}, suitable for a procurement leadership audience. Preserve all \
 numbers, percentages, dates, and supplier/batch identifiers exactly as given — do not localize \
-or alter them. Do not add commentary, notes, or an English restatement.
-
-When ready, call the submit_translation tool exactly once with the translated text."""
+or alter them. Do not add commentary, notes, or an English restatement."""
 
 
 class UnsupportedLanguageError(ValueError):
@@ -147,62 +107,52 @@ class UnsupportedLanguageError(ValueError):
 
 
 # --------------------------------------------------------------------------- #
-# Client construction
+# Client Construction & LLM Invocation
 # --------------------------------------------------------------------------- #
 
-def _build_client() -> anthropic.Anthropic:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+def _build_client() -> genai.Client:
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise AgentUnavailableError("ANTHROPIC_API_KEY is not configured.")
-    return anthropic.Anthropic(api_key=api_key)
+        raise AgentUnavailableError("GEMINI_API_KEY environment variable is missing.")
+    return genai.Client(api_key=api_key)
 
 
-def _call_forced_tool(
-    client: anthropic.Anthropic,
-    system: str,
+def _call_structured_gemini(
+    client: genai.Client,
+    system_instruction: str,
     user_content: str,
-    tool: ToolParam,
+    response_schema: type[BaseModel],
     model: str,
 ) -> Dict[str, Any]:
     """
-    Make a single Claude call with tool_choice forced to `tool`, and return
-    that tool call's validated input dict. Anthropic SDK errors are caught
-    and re-raised as AgentUnavailableError.
+    Executes a Gemini request with structured output JSON enforcement.
     """
-    messages: List[MessageParam] = [{"role": "user", "content": user_content}]
-
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=MAX_TOKENS,
-            system=system,
-            tools=[tool],
-            tool_choice={"type": "tool", "name": tool["name"]},
-            messages=messages,
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            response_mime_type="application/json",
+            response_schema=response_schema,
+            temperature=0.2,
         )
-    except anthropic.AuthenticationError as exc:
-        logger.error("Anthropic authentication failed: %s", exc)
-        raise AgentUnavailableError("Authentication with the Anthropic API failed.", exc) from exc
-    except anthropic.RateLimitError as exc:
-        logger.warning("Anthropic rate limit hit: %s", exc)
-        raise AgentUnavailableError("The Anthropic API rate limit was exceeded.", exc) from exc
-    except anthropic.APIConnectionError as exc:
-        logger.error("Could not connect to the Anthropic API: %s", exc)
-        raise AgentUnavailableError("Could not connect to the Anthropic API.", exc) from exc
-    except anthropic.APIStatusError as exc:
-        logger.error("Anthropic API returned an error status: %s", exc)
-        raise AgentUnavailableError(f"Anthropic API error (status {exc.status_code}).", exc) from exc
-
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == tool["name"]:
-            return block.input or {}
-
-    logger.error("Forced tool call to '%s' did not return a matching tool_use block.", tool["name"])
-    raise AgentUnavailableError(f"Anthropic API did not return the expected '{tool['name']}' tool call.")
+        response = client.models.generate_content(
+            model=model,
+            contents=user_content,
+            config=config,
+        )
+        if not response.text:
+            raise AgentUnavailableError("Received empty response from Gemini API.")
+        
+        return json.loads(response.text)
+    except APIError as exc:
+        logger.error("Gemini API error during generation: %s", exc)
+        raise AgentUnavailableError(f"Gemini API error: {str(exc)}") from exc
+    except Exception as exc:
+        logger.error("Unexpected error during Gemini execution: %s", exc)
+        raise AgentUnavailableError(f"Failed to generate structured agent output: {str(exc)}") from exc
 
 
 # --------------------------------------------------------------------------- #
-# Threshold rule engine
+# Threshold Rule Engine Helpers
 # --------------------------------------------------------------------------- #
 
 def _compute_degradation(reject_rate_3mo: float, reject_rate_6mo: float) -> float:
@@ -235,7 +185,7 @@ def _not_found_alert(supplier_id: str) -> SupplierAlert:
 
 
 # --------------------------------------------------------------------------- #
-# Public entry point
+# Public Entry Point
 # --------------------------------------------------------------------------- #
 
 def run_supplier_agent(
@@ -247,21 +197,6 @@ def run_supplier_agent(
     Evaluate a supplier's quality trend and, only if a real degradation is
     detected, produce an LLM-authored trend description, severity, suggested
     action, and draft escalation message — optionally localized.
-
-    Args:
-        supplier_id: Supplier to evaluate.
-        lang: Optional 'en' (English), 'hi' (Hindi), or 'or' (Odia).
-        model: Override the Claude model used for both the analysis and
-            translation calls.
-
-    Returns:
-        A validated SupplierAlert. severity="NONE" cases never touch the
-        LLM at all.
-
-    Raises:
-        UnsupportedLanguageError: if `lang` is provided but not 'en', 'hi', or 'or'.
-        AgentUnavailableError: on Anthropic connectivity/auth/rate-limit
-            failures. Callers (router.py) should map this to HTTP 503.
     """
     if lang is not None and lang not in _SUPPORTED_LANGS:
         raise UnsupportedLanguageError(
@@ -279,16 +214,16 @@ def run_supplier_agent(
     reject_rate_6mo = float(supplier_data["reject_rate_6mo"])
     delta = _compute_degradation(reject_rate_3mo, reject_rate_6mo)
 
-    # --- Rule engine gate: no LLM call at all unless this trips. ---
+    # --- Rule engine gate: no LLM call at all unless this trips ---
     if delta <= DEGRADATION_THRESHOLD:
         return _no_degradation_alert(supplier_id, reject_rate_3mo, reject_rate_6mo)
 
     active_model = model or SUPPLIER_AGENT_MODEL
     client = _build_client()
 
-    analysis_input = _call_forced_tool(
+    analysis_input = _call_structured_gemini(
         client=client,
-        system=ANALYSIS_SYSTEM_PROMPT,
+        system_instruction=ANALYSIS_SYSTEM_PROMPT,
         user_content=(
             "Supplier data (already fetched from the system of record):\n"
             f"{supplier_data}\n\n"
@@ -296,18 +231,18 @@ def run_supplier_agent(
             f"{reject_rate_6mo:.4f} = {delta:+.4f}, which exceeds the "
             f"{DEGRADATION_THRESHOLD:.2f} threshold."
         ),
-        tool=SUBMIT_ALERT_TOOL,
+        response_schema=AlertAnalysisResponse,
         model=active_model,
     )
 
     severity = str(analysis_input.get("severity", "")).upper()
     if severity not in _VALID_SEVERITIES - {"NONE"}:
-        logger.warning("submit_alert returned invalid severity %r; defaulting to MEDIUM.", severity)
+        logger.warning("Agent returned invalid severity %r; defaulting to MEDIUM.", severity)
         severity = "MEDIUM"
 
     draft_escalation_message = str(analysis_input.get("draft_escalation_message", "")).strip()
 
-    # Skip translation call when lang is English
+    # Skip translation call when lang is English or None
     if lang is not None and lang != "en" and draft_escalation_message:
         draft_escalation_message = _translate_message(
             client=client,
@@ -325,13 +260,13 @@ def run_supplier_agent(
     )
 
 
-def _translate_message(client: anthropic.Anthropic, text: str, lang: str, model: str) -> str:
+def _translate_message(client: genai.Client, text: str, lang: str, model: str) -> str:
     language_name = _SUPPORTED_LANGS[lang]
-    translation_input = _call_forced_tool(
+    translation_input = _call_structured_gemini(
         client=client,
-        system=TRANSLATION_SYSTEM_PROMPT_TEMPLATE.format(language=language_name),
+        system_instruction=TRANSLATION_SYSTEM_PROMPT_TEMPLATE.format(language=language_name),
         user_content=text,
-        tool=SUBMIT_TRANSLATION_TOOL,
+        response_schema=TranslationResponse,
         model=model,
     )
     translated = str(translation_input.get("translated_text", "")).strip()
