@@ -3,4 +3,4 @@ _pycache_/
 *.pyc
 .env
 meditrust.db
-vnv/
+venv/
