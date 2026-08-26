@@ -491,9 +491,3 @@ def execute_tool(name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         validated = input_model.model_validate(tool_input)
     except ValidationError as exc:
         return {"error": f"Invalid input for tool '{name}': {exc.errors()}"}
-
-    try:
-        return func(**validated.model_dump())
-    except Exception as exc:  # defensive: tool implementations must never crash the agent loop
-        logger.exception("Tool '%s' raised an unexpected exception.", name)
-        return {"error": f"Tool '{name}' failed unexpectedly: {exc}"}
