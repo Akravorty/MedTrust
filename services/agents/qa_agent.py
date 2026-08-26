@@ -190,7 +190,7 @@ def run_qa_agent(query: str, model: Optional[str] = None) -> AgentResponse:
                 max_tokens=MAX_TOKENS,
                 system=SYSTEM_PROMPT,
                 tools=_ALL_TOOLS,
-                messages=messages,
+                messages=list(messages),
             )
         except anthropic.AuthenticationError as exc:
             logger.error("Anthropic authentication failed: %s", exc)
