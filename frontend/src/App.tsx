@@ -199,7 +199,7 @@ function App() {
               <RecallFlow batchId={batchId!} onRecallTriggered={handleRecallTriggered} />
             </div>
             <div style={{ flex: 1, position: 'sticky', top: '5.5rem' }}>
-              <ChatPanel batchId={batchId!} />
+              <ChatPanel batchData={decision} />
             </div>
           </div>
         )}

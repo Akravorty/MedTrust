@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { askAgent } from '../services/api';
 import { Send, Bot, FileText } from 'lucide-react';
 import { QAResponse } from '../types/schema';
@@ -35,12 +35,12 @@ function MarkdownText({ text }: { text: string }) {
 
 function mkId() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
-export default function ChatPanel({ batchId }: { batchId: string }) {
+export default function ChatPanel({ batchData }: { batchData: import('../types/schema').BatchDecision }) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: mkId(),
       role: 'agent',
-      text: `I am the MediTrust QA Agent. How can I help you evaluate batch ${batchId}?\n\nAsk about: rejection reasons, recommended actions, temperature breach, supplier deviation, audit trail, or seal integrity.`,
+      text: `I am the MediTrust QA Agent. How can I help you evaluate batch ${batchData.batch_id}?`,
     },
   ]);
   const [input, setInput] = useState('');
@@ -66,7 +66,7 @@ export default function ChatPanel({ batchId }: { batchId: string }) {
     try {
       // Pass full history so askAgent can resolve follow-up context
       const history = [...messages, userMsg].map(m => ({ role: m.role, text: m.text }));
-      const res = await askAgent(batchId, q, history);
+      const res = await askAgent(batchData, q, history);
       setMessages(prev => [
         ...prev,
         { id: mkId(), role: 'agent', text: res.answer, responseMeta: res },

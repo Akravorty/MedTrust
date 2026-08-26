@@ -56,6 +56,7 @@ export default function ScanIntake({ onScanComplete }: Props) {
   const [inputFocused, setInputFocused]     = useState(false);
   const [flashEffect, setFlashEffect]       = useState(false);
   const [detectedCode, setDetectedCode]     = useState<string | null>(null);
+  const [scanTimeoutMsg, setScanTimeoutMsg] = useState<string | null>(null);
 
   /* ── refs ── */
   const inputRef        = useRef<HTMLInputElement>(null);
@@ -64,6 +65,7 @@ export default function ScanIntake({ onScanComplete }: Props) {
   const codeReaderRef   = useRef<BrowserMultiFormatReader | null>(null);
   const animFrameRef    = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
+  const scanTimerRef    = useRef<NodeJS.Timeout | null>(null);
 
   /* ─── submit ─── */
   const handleScanSubmit = useCallback((idToScan?: string) => {
@@ -95,6 +97,10 @@ export default function ScanIntake({ onScanComplete }: Props) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
+    if (scanTimerRef.current) {
+      clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
     setIsWebcamActive(false);
     setDetectedCode(null);
   }, []);
@@ -124,6 +130,13 @@ export default function ScanIntake({ onScanComplete }: Props) {
         await videoRef.current.play();
       }
       setIsWebcamActive(true);
+      setScanTimeoutMsg(null);
+
+      scanTimerRef.current = setTimeout(() => {
+        stopWebcam();
+        setScanTimeoutMsg("Barcode is not properly visible. Please enter the Batch ID manually below.");
+        inputRef.current?.focus();
+      }, 15000);
 
       /* Strategy 1 – native BarcodeDetector (Chrome/Edge, hardware-accelerated) */
       if ('BarcodeDetector' in window) {
@@ -232,6 +245,20 @@ export default function ScanIntake({ onScanComplete }: Props) {
           <div className="scanner-icon-wrap" style={{ zIndex: 2 }}>
             <Camera size={52} strokeWidth={1.4} className="scanner-camera-icon" />
             {scanning && <p className="scanning-label animate-pulse">Reading batch data…</p>}
+            {scanTimeoutMsg && !scanning && (
+              <p className="scanning-label" style={{ 
+                background: 'rgba(220, 38, 38, 0.9)', 
+                padding: '8px 16px', 
+                borderRadius: '8px', 
+                color: '#fff', 
+                textAlign: 'center', 
+                maxWidth: '85%',
+                marginTop: '1rem',
+                lineHeight: 1.4
+              }}>
+                {scanTimeoutMsg}
+              </p>
+            )}
           </div>
         )}
 
