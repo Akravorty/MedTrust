@@ -1,3 +1,13 @@
+"""
+main.py
+
+FastAPI app entrypoint for MediTrust. Currently empty in the repo, so this
+is a minimal scaffold: it mounts each service's router and initializes the
+shared DB on startup. Person 1 / Person 2 / Person 4 should add their own
+`app.include_router(...)` line here when their routers exist — this file
+intentionally does not know anything about ledger internals.
+"""
+
 from fastapi import FastAPI
 
 from shared.database import init_db
