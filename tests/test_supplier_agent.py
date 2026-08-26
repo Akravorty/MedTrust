@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, Dict, List
+from unittest import result
 
 import anthropic
 import httpx
@@ -118,8 +119,7 @@ def test_no_degradation_returns_none_without_calling_llm(monkeypatch: pytest.Mon
     )
 
     result = supplier_agent.run_supplier_agent("SUP-001")
-
-    assert isinstance(result, SupplierAlert)
+    assert isinstance(result, supplier_agent.SupplierAlert)
     assert result.severity == "NONE"
     assert result.draft_escalation_message == ""
     assert "No significant degradation" in result.trend_description
