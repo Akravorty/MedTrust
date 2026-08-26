@@ -1,23 +1,23 @@
 from fastapi import FastAPI
-from fastapi.openapi.docs import get_swagger_ui_html
-from services.agents.router import router
 
-app = FastAPI(title="MediTrust API", docs_url=None)
+from shared.database import init_db
+from services.ledger.router import router as ledger_router
+from services.intake.router import router as intake_router
+from services.agents.router import router as agent_router   # add this
 
-# Include Agent Router
-app.include_router(router)
-
-
-@app.get("/", include_in_schema=False)
-def root():
-    return {"message": "MediTrust API is running"}
+app = FastAPI(title="MediTrust")
 
 
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui_html():
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=app.title + " - Swagger UI",
-        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
-        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-    )
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
+
+
+app.include_router(ledger_router)
+app.include_router(intake_router)
+app.include_router(agent_router)   # add this
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
