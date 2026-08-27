@@ -12,7 +12,8 @@ from shared.database import init_db
 from services.risk_engine.router import router as risk_router
 from services.ledger.router import router as ledger_router
 from services.intake.router import router as intake_router
-from services.agents.router import router as agent_router
+from services.agents.router import router as agent_router   # add this
+from services.risk_engine.router import router as risk_router
 
 app = FastAPI(title="MediTrust")
 
@@ -25,8 +26,8 @@ def on_startup() -> None:
 app.include_router(risk_router)
 app.include_router(ledger_router)
 app.include_router(intake_router)
-app.include_router(agent_router)
-
+app.include_router(agent_router)   # add this
+app.include_router(risk_router)
 
 @app.get("/health")
 def health():

@@ -7,3 +7,5 @@ meditrust.db
 .pytest_cache/
 venv/
 .venv/
+meditrust.db-shm
+meditrust.db-wal
