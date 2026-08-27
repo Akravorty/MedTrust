@@ -1,0 +1,27 @@
+{
+  "model_version": "risk-xgb-v1.0",
+  "feature_order": [
+    "days_to_expiry",
+    "temp_log_deviation_count",
+    "supplier_reject_rate_3mo",
+    "supplier_reject_rate_6mo",
+    "ocr_qr_match_score",
+    "physical_inspection_flag_count",
+    "days_since_manufacture",
+    "batch_size"
+  ],
+  "trained_at": "2026-08-28T01:01:06.228180",
+  "imputation_defaults": {
+    "days_to_expiry_median": 358.0,
+    "ocr_qr_match_score_median": 0.9176243235783683,
+    "days_since_manufacture_median": 454.0,
+    "batch_size_median": 2637.0
+  },
+  "metrics": {
+    "precision": 0.8194444444444444,
+    "recall": 0.7919463087248322,
+    "f1": 0.8054607508532423,
+    "roc_auc": 0.9556392208217384
+  },
+  "notes": "Prototype model trained on synthetic data modeling realistic failure patterns; deployment would require validated hospital data, calibration and clinical validation."
+}
