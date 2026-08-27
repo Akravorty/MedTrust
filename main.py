@@ -12,6 +12,7 @@ from services.intake.router import router as intake_router
 from services.agents.router import router as agent_router
 from data.generate_supplier import generate_suppliers
 from data.golden_batches import generate_batches
+from data.seed_recall_demo import generate_recall_demo
 
 app = FastAPI(title="MediTrust")
 
@@ -22,7 +23,7 @@ def on_startup() -> None:
     conn = get_connection()
     generate_suppliers(conn)   # idempotent — safe to call every startup
     generate_batches(conn)     # idempotent — safe to call every startup
-
+    generate_recall_demo(conn) # idempotent — safe to call every startup
 
 app.include_router(risk_router)
 app.include_router(ledger_router)
