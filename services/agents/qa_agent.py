@@ -218,7 +218,12 @@ def _finalize(query: str, submit_input: Dict[str, Any]) -> AgentResponse:
     if not isinstance(evidence_sources, list):
         evidence_sources = [str(evidence_sources)]
 
-    answer = str(submit_input.get("answer", "")).strip() or "The agent did not produce an answer."
+    raw_answer = str(submit_input.get("answer", "")).strip()
+    if not raw_answer:
+        # An empty/whitespace-only answer means the model had nothing grounded
+        # to say — never let that pass through as HIGH/MEDIUM confidence.
+        confidence = "INSUFFICIENT_EVIDENCE"
+    answer = raw_answer or "The agent did not produce an answer."
 
     try:
         return AgentResponse(

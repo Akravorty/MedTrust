@@ -3,22 +3,26 @@ tests/test_supplier_agent.py
 
 Unit tests for services/agents/supplier_agent.py.
 
-No real network or Anthropic API calls are made: `supplier_agent._build_client`
+No real network or Gemini API calls are made: `supplier_agent._build_client`
 and `supplier_agent.execute_tool` are monkeypatched with fakes, following the
-same pattern as tests/test_qa_agent.py. Several tests assert that the LLM is
-NOT invoked at all when the threshold rule engine short-circuits — that's the
-core cost/latency guarantee this module makes.
+same pattern as tests/test_qa_agent.py. `client.models.generate_content(...)`
+is faked to return an object with a `.text` attribute holding the JSON string
+that `_call_structured_gemini` expects to `json.loads(...)` — matching the
+google-genai structured-output response shape, not Anthropic tool_use blocks.
+
+Several tests assert that the LLM is NOT invoked at all when the threshold
+rule engine short-circuits — that's the core cost/latency guarantee this
+module makes.
 """
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
-from typing import Any, Dict, List
-from unittest import result
+from typing import Any, Dict, List, Optional
 
-import anthropic
-import httpx
 import pytest
+from google.genai.errors import APIError
 
 from services.agents import supplier_agent
 from shared.schemas import SupplierAlert
@@ -28,35 +32,36 @@ from shared.schemas import SupplierAlert
 # Test helpers
 # --------------------------------------------------------------------------- #
 
-def _tool_use_block(name: str, input_: Dict[str, Any], block_id: str = "toolu_01") -> SimpleNamespace:
-    return SimpleNamespace(type="tool_use", name=name, input=input_, id=block_id)
+def _analysis_response(
+    trend_description: str,
+    severity: str,
+    suggested_action: str,
+    draft_escalation_message: str,
+) -> SimpleNamespace:
+    """Mimics the google-genai response for a structured AlertAnalysisResponse call."""
+    payload = {
+        "trend_description": trend_description,
+        "severity": severity,
+        "suggested_action": suggested_action,
+        "draft_escalation_message": draft_escalation_message,
+    }
+    return SimpleNamespace(text=json.dumps(payload))
 
 
-def _text_block(text: str) -> SimpleNamespace:
-    return SimpleNamespace(type="text", text=text)
+def _translation_response(translated_text: str) -> SimpleNamespace:
+    """Mimics the google-genai response for a structured TranslationResponse call."""
+    return SimpleNamespace(text=json.dumps({"translated_text": translated_text}))
 
 
-def _response(content_blocks: List[SimpleNamespace]) -> SimpleNamespace:
-    return SimpleNamespace(content=content_blocks)
-
-
-def _fake_request() -> httpx.Request:
-    return httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-
-
-def _fake_httpx_response(status_code: int) -> httpx.Response:
-    return httpx.Response(status_code=status_code, request=_fake_request())
-
-
-class _FakeMessages:
+class _FakeModels:
     def __init__(self, responses: List[Any]) -> None:
         self._responses = list(responses)
         self.calls: List[Dict[str, Any]] = []
 
-    def create(self, **kwargs: Any) -> Any:
+    def generate_content(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         if not self._responses:
-            raise AssertionError("_FakeMessages.create called more times than responses were queued.")
+            raise AssertionError("_FakeModels.generate_content called more times than responses were queued.")
         next_item = self._responses.pop(0)
         if isinstance(next_item, BaseException):
             raise next_item
@@ -65,12 +70,12 @@ class _FakeMessages:
 
 class _FakeClient:
     def __init__(self, responses: List[Any]) -> None:
-        self.messages = _FakeMessages(responses)
+        self.models = _FakeModels(responses)
 
 
 @pytest.fixture(autouse=True)
 def _api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-used")
 
 
 def _patch_client(monkeypatch: pytest.MonkeyPatch, responses: List[Any]) -> _FakeClient:
@@ -88,12 +93,16 @@ def _forbid_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(supplier_agent, "_build_client", _raise)
 
 
+def _make_api_error(code: int, message: str) -> APIError:
+    return APIError(code, {"error": {"message": message, "status": "ERROR"}})
+
+
 def _supplier_payload(
     supplier_id: str = "SUP-001",
     reject_rate_3mo: float = 0.02,
     reject_rate_6mo: float = 0.02,
     total_batches_supplied: int = 100,
-    flagged_incidents: List[str] | None = None,
+    flagged_incidents: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     return {
         "supplier_id": supplier_id,
@@ -119,7 +128,7 @@ def test_no_degradation_returns_none_without_calling_llm(monkeypatch: pytest.Mon
     )
 
     result = supplier_agent.run_supplier_agent("SUP-001")
-    assert isinstance(result, supplier_agent.SupplierAlert)
+    assert isinstance(result, SupplierAlert)
     assert result.severity == "NONE"
     assert result.draft_escalation_message == ""
     assert "No significant degradation" in result.trend_description
@@ -178,27 +187,24 @@ def test_degradation_invokes_llm_and_returns_alert(monkeypatch: pytest.MonkeyPat
         lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
     )
 
-    submit_alert_block = _tool_use_block(
-        "submit_alert",
-        {
-            "trend_description": "Reject rate rose from 5% to 20% over the last 3 months.",
-            "severity": "HIGH",
-            "suggested_action": "Place supplier on hold pending review.",
-            "draft_escalation_message": "Please review SUP-001's rising reject rate.",
-        },
+    analysis_resp = _analysis_response(
+        trend_description="Reject rate rose from 5% to 20% over the last 3 months.",
+        severity="HIGH",
+        suggested_action="Place supplier on hold pending review.",
+        draft_escalation_message="Please review SUP-001's rising reject rate.",
     )
-    fake_client = _patch_client(monkeypatch, [_response([submit_alert_block])])
+    fake_client = _patch_client(monkeypatch, [analysis_resp])
 
     result = supplier_agent.run_supplier_agent("SUP-001")
 
     assert result.severity == "HIGH"
     assert result.supplier_id == "SUP-001"
     assert result.draft_escalation_message == "Please review SUP-001's rising reject rate."
-    assert len(fake_client.messages.calls) == 1
+    assert len(fake_client.models.calls) == 1
 
-    call_kwargs = fake_client.messages.calls[0]
-    assert call_kwargs["tool_choice"] == {"type": "tool", "name": "submit_alert"}
-    assert call_kwargs["tools"] == [supplier_agent.SUBMIT_ALERT_TOOL]
+    call_kwargs = fake_client.models.calls[0]
+    assert call_kwargs["config"].response_schema is supplier_agent.AlertAnalysisResponse
+    assert call_kwargs["config"].system_instruction == supplier_agent.ANALYSIS_SYSTEM_PROMPT
 
 
 def test_invalid_severity_from_llm_defaults_to_medium(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,16 +213,13 @@ def test_invalid_severity_from_llm_defaults_to_medium(monkeypatch: pytest.Monkey
         "execute_tool",
         lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
     )
-    submit_alert_block = _tool_use_block(
-        "submit_alert",
-        {
-            "trend_description": "Reject rate rose sharply.",
-            "severity": "EXTREME",  # not a valid enum value
-            "suggested_action": "Escalate.",
-            "draft_escalation_message": "Escalation needed.",
-        },
+    analysis_resp = _analysis_response(
+        trend_description="Reject rate rose sharply.",
+        severity="EXTREME",  # not a valid enum value
+        suggested_action="Escalate.",
+        draft_escalation_message="Escalation needed.",
     )
-    _patch_client(monkeypatch, [_response([submit_alert_block])])
+    _patch_client(monkeypatch, [analysis_resp])
 
     result = supplier_agent.run_supplier_agent("SUP-001")
 
@@ -234,33 +237,24 @@ def test_lang_hi_translates_draft_escalation_message(monkeypatch: pytest.MonkeyP
         lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
     )
 
-    submit_alert_block = _tool_use_block(
-        "submit_alert",
-        {
-            "trend_description": "Reject rate rose from 5% to 20%.",
-            "severity": "HIGH",
-            "suggested_action": "Hold supplier.",
-            "draft_escalation_message": "Please review SUP-001's rising reject rate.",
-        },
+    analysis_resp = _analysis_response(
+        trend_description="Reject rate rose from 5% to 20%.",
+        severity="HIGH",
+        suggested_action="Hold supplier.",
+        draft_escalation_message="Please review SUP-001's rising reject rate.",
     )
-    submit_translation_block = _tool_use_block(
-        "submit_translation",
-        {"translated_text": "कृपया SUP-001 की बढ़ती अस्वीकृति दर की समीक्षा करें।"},
-    )
-    fake_client = _patch_client(
-        monkeypatch, [_response([submit_alert_block]), _response([submit_translation_block])]
-    )
+    translation_resp = _translation_response("कृपया SUP-001 की बढ़ती अस्वीकृति दर की समीक्षा करें।")
+    fake_client = _patch_client(monkeypatch, [analysis_resp, translation_resp])
 
     result = supplier_agent.run_supplier_agent("SUP-001", lang="hi")
 
-    assert len(fake_client.messages.calls) == 2
-    translation_call = fake_client.messages.calls[1]
-    assert translation_call["tool_choice"] == {"type": "tool", "name": "submit_translation"}
-    assert translation_call["tools"] == [supplier_agent.SUBMIT_TRANSLATION_TOOL]
+    assert len(fake_client.models.calls) == 2
+    translation_call = fake_client.models.calls[1]
+    assert "Hindi" in translation_call["config"].system_instruction
     # The English draft is what gets sent to the translator.
-    assert translation_call["messages"][0]["content"] == "Please review SUP-001's rising reject rate."
+    assert translation_call["contents"] == "Please review SUP-001's rising reject rate."
     # The final alert carries the translated text, not the English original.
-    assert result.draft_escalation_message == submit_translation_block.input["translated_text"]
+    assert result.draft_escalation_message == "कृपया SUP-001 की बढ़ती अस्वीकृति दर की समीक्षा करें।"
 
 
 def test_lang_or_uses_odia_in_translation_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,24 +263,19 @@ def test_lang_or_uses_odia_in_translation_system_prompt(monkeypatch: pytest.Monk
         "execute_tool",
         lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
     )
-    submit_alert_block = _tool_use_block(
-        "submit_alert",
-        {
-            "trend_description": "Degraded.",
-            "severity": "MEDIUM",
-            "suggested_action": "Review.",
-            "draft_escalation_message": "Escalation text.",
-        },
+    analysis_resp = _analysis_response(
+        trend_description="Degraded.",
+        severity="MEDIUM",
+        suggested_action="Review.",
+        draft_escalation_message="Escalation text.",
     )
-    submit_translation_block = _tool_use_block("submit_translation", {"translated_text": "translated-odia-text"})
-    fake_client = _patch_client(
-        monkeypatch, [_response([submit_alert_block]), _response([submit_translation_block])]
-    )
+    translation_resp = _translation_response("translated-odia-text")
+    fake_client = _patch_client(monkeypatch, [analysis_resp, translation_resp])
 
     result = supplier_agent.run_supplier_agent("SUP-001", lang="or")
 
-    translation_call = fake_client.messages.calls[1]
-    assert "Odia" in translation_call["system"]
+    translation_call = fake_client.models.calls[1]
+    assert "Odia" in translation_call["config"].system_instruction
     assert result.draft_escalation_message == "translated-odia-text"
 
 
@@ -296,17 +285,14 @@ def test_translation_falls_back_to_original_on_empty_response(monkeypatch: pytes
         "execute_tool",
         lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
     )
-    submit_alert_block = _tool_use_block(
-        "submit_alert",
-        {
-            "trend_description": "Degraded.",
-            "severity": "MEDIUM",
-            "suggested_action": "Review.",
-            "draft_escalation_message": "Original English escalation.",
-        },
+    analysis_resp = _analysis_response(
+        trend_description="Degraded.",
+        severity="MEDIUM",
+        suggested_action="Review.",
+        draft_escalation_message="Original English escalation.",
     )
-    submit_translation_block = _tool_use_block("submit_translation", {"translated_text": "   "})
-    _patch_client(monkeypatch, [_response([submit_alert_block]), _response([submit_translation_block])])
+    translation_resp = _translation_response("   ")  # whitespace-only
+    _patch_client(monkeypatch, [analysis_resp, translation_resp])
 
     result = supplier_agent.run_supplier_agent("SUP-001", lang="hi")
 
@@ -340,37 +326,39 @@ def test_unsupported_lang_raises_before_any_lookup(monkeypatch: pytest.MonkeyPat
 
 
 # --------------------------------------------------------------------------- #
-# Anthropic SDK error -> AgentUnavailableError mapping
+# Gemini SDK error -> AgentUnavailableError mapping
 # --------------------------------------------------------------------------- #
 
-def test_connection_error_during_analysis_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_api_error_during_analysis_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         supplier_agent,
         "execute_tool",
         lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
     )
-    err = anthropic.APIConnectionError(message="connection refused", request=_fake_request())
+    err = _make_api_error(500, "server exploded")
     _patch_client(monkeypatch, [err])
 
-    with pytest.raises(supplier_agent.AgentUnavailableError):
+    with pytest.raises(supplier_agent.AgentUnavailableError) as excinfo:
         supplier_agent.run_supplier_agent("SUP-001")
+    assert "Gemini API error" in str(excinfo.value.reason)
 
 
-def test_rate_limit_error_during_analysis_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unexpected_exception_during_analysis_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         supplier_agent,
         "execute_tool",
         lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
     )
-    err = anthropic.RateLimitError("rate limited", response=_fake_httpx_response(429), body=None)
+    err = ConnectionError("connection refused")
     _patch_client(monkeypatch, [err])
 
-    with pytest.raises(supplier_agent.AgentUnavailableError):
+    with pytest.raises(supplier_agent.AgentUnavailableError) as excinfo:
         supplier_agent.run_supplier_agent("SUP-001")
+    assert "Failed to generate structured agent output" in str(excinfo.value.reason)
 
 
 def test_missing_api_key_raises_agent_unavailable_when_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setattr(
         supplier_agent,
         "execute_tool",
@@ -381,19 +369,15 @@ def test_missing_api_key_raises_agent_unavailable_when_degraded(monkeypatch: pyt
         supplier_agent.run_supplier_agent("SUP-001")
 
 
-def test_forced_tool_call_without_matching_block_raises_agent_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_client = _FakeClient([_response([_text_block("I refuse to use tools.")])])
-
-    with pytest.raises(supplier_agent.AgentUnavailableError):
-        supplier_agent._call_forced_tool(
-            client=fake_client,
-            system="system prompt",
-            user_content="user content",
-            tool=supplier_agent.SUBMIT_ALERT_TOOL,
-            model="claude-3-7-sonnet-20250219",
-        )
+# NOTE: The original test file also had
+# `test_forced_tool_call_without_matching_block_raises_agent_unavailable`,
+# exercising a `supplier_agent._call_forced_tool` helper — that function
+# doesn't exist in supplier_agent.py. The Gemini implementation enforces a
+# single structured JSON response via `response_schema=` on the request
+# config rather than a forced-tool-choice retry loop, so there is no
+# equivalent "forced tool call with no matching block" failure mode to test
+# here. Dropped rather than faked back into existence; see the same note in
+# test_qa_agent.py for the analogous `_find_tool_use` case.
 
 
 # --------------------------------------------------------------------------- #

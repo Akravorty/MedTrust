@@ -84,7 +84,7 @@ async def ask_qa(payload: QARequest) -> AgentResponse:
 
 
 @router.get(
-    "/supplier/{supplier_id}/alert",
+    "/supplier-report/{supplier_id}",
     response_model=SupplierAlert,
     status_code=status.HTTP_200_OK,
     summary="Evaluate supplier reject-rate trends and get an LLM-drafted escalation.",

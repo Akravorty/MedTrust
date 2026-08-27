@@ -1,7 +1,9 @@
 node_modules/
-_pycache_/
+__pycache__/
 *.pyc
 .env
 meditrust.db
+*.db-journal
+.pytest_cache/
 venv/
 .venv/
