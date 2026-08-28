@@ -52,8 +52,8 @@ logger = logging.getLogger("meditrust.agents.supplier_agent")
 # Configuration
 # --------------------------------------------------------------------------- #
 
-DEFAULT_PRIMARY_MODEL = "gemini-2.5-flash"
-SUPPLIER_AGENT_MODEL = os.environ.get("SUPPLIER_AGENT_MODEL", DEFAULT_PRIMARY_MODEL)
+DEFAULT_PRIMARY_MODEL = "gemini-3.6-flash"
+SUPPLIER_AGENT_MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_PRIMARY_MODEL)
 
 DEGRADATION_THRESHOLD = 0.05
 

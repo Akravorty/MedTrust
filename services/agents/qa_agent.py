@@ -23,9 +23,10 @@ load_dotenv()
 
 logger = logging.getLogger("meditrust.agents.qa_agent")
 
-# Fix 1: Use valid, current Gemini model
+# Model is set via .env (GEMINI_MODEL) — see .env.example. Falls back to a
+# known-stable default if unset.
 DEFAULT_PRIMARY_MODEL = "gemini-3.6-flash"
-QA_AGENT_MODEL = os.environ.get("QA_AGENT_MODEL", DEFAULT_PRIMARY_MODEL)
+QA_AGENT_MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_PRIMARY_MODEL)
 
 MAX_TOOL_ITERATIONS = 5
 _VALID_CONFIDENCE = {"HIGH", "MEDIUM", "INSUFFICIENT_EVIDENCE"}
