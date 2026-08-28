@@ -64,9 +64,8 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
 
     setLoading(true);
     try {
-      // Pass full history so askAgent can resolve follow-up context
-      const history = [...messages, userMsg].map(m => ({ role: m.role, text: m.text }));
-      const res = await askAgent(batchData, q, history);
+      // Step 3: Pass only batchData and q since backend endpoint is stateless
+      const res = await askAgent(batchData, q);
       setMessages(prev => [
         ...prev,
         { id: mkId(), role: 'agent', text: res.answer, responseMeta: res },
@@ -102,7 +101,7 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
             {msg.responseMeta && (
               <div className="flex-row items-center gap-2" style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#64748b', flexWrap: 'wrap' }}>
                 <span className="chat-meta-conf">
-                  {(msg.responseMeta.confidence * 100).toFixed(0)}% Conf
+                  {msg.responseMeta.confidence} Conf
                 </span>
                 {msg.responseMeta.evidence_sources.map(src => (
                   <span key={src} className="flex-row items-center gap-1" title={src}>

@@ -15,10 +15,11 @@ export interface BatchDecision {
 }
 
 export interface QAResponse {
-  answer: string;
-  confidence: number;
-  evidence_sources: string[];
-}
+   answer: string;
+-  confidence: number;
++  confidence: 'HIGH' | 'MEDIUM' | 'INSUFFICIENT_EVIDENCE';
+   evidence_sources: string[];
+ }
 
 export interface TraceEvent {
   id: string;

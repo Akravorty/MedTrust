@@ -55,33 +55,50 @@ export const scanBatch = async (batchId: string, forceStatus?: Status): Promise<
   return getBatchRiskData(batchId, forceStatus);
 };
 
-// ── Groq LLM integration ─────────────────────────────────────────────────────
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
-const GROQ_MODEL = 'openai/gpt-oss-120b';
-
-/**
- * Sends the user's question to Groq LLM with a MediTrust QA system prompt
- * built from the live batch context. All responses are dynamic — no static text.
- */
+// ── Real backend evidence-grounded agent: POST /agent/qa ────────────────────
 export const askAgent = async (
   batchData: BatchDecision,
   question: string,
-  history: Array<{ role: 'user' | 'agent'; text: string }> = [],
 ): Promise<QAResponse> => {
-
-  // ── Guard: no API key ────────────────────────────────────────────────────
-  if (!GROQ_API_KEY) {
+  if (!batchData || !batchData.batch_id) {
     return {
-      answer:
-        '⚠️ **API key not configured.**\n\n' +
-        'Add `VITE_GROQ_API_KEY=<your-groq-key>` to a `.env` file at the project root, then restart the dev server.\n\n' +
-        'Get a free key at https://console.groq.com',
-      confidence: 0,
+      answer: 'No batch is currently selected — scan or select a batch first.',
+      confidence: 'INSUFFICIENT_EVIDENCE',
       evidence_sources: [],
     };
   }
 
+  // Scope the question to the current batch, matching how qa_agent.py's
+  // tools (get_batch/get_decision/get_trace) expect to be queried.
+  const scopedQuery = `Regarding batch ${batchData.batch_id}: ${question}`;
+
+  try {
+    const res = await fetch(`${API_BASE}/agent/qa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: scopedQuery }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`Agent unavailable (${res.status}): ${errBody}`);
+    }
+
+    const data = await res.json();
+    return {
+      answer: data.answer,
+      confidence: data.confidence,
+      evidence_sources: data.evidence_sources ?? [],
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    return {
+      answer: `❌ **Agent error:** ${msg}`,
+      confidence: 'INSUFFICIENT_EVIDENCE',
+      evidence_sources: [],
+    };
+  }
+};
   // ── Guard: no batch data ──────────────────────────────────────────────────
   if (!batchData || !batchData.batch_id) {
     return {
