@@ -4,7 +4,15 @@ import shutil
 import re
 import numpy as np
 import cv2
+from __future__ import annotations
+import os
+import shutil
+import re
+import logging
+import numpy as np
+import cv2
 
+logger = logging.getLogger("intake.ocr")
 try:
     import pytesseract
     # Windows often doesn't have tesseract on PATH — point to it explicitly if found.
@@ -78,12 +86,13 @@ _VARIANTS = [
 
 def _run_tesseract(processed: np.ndarray) -> str:
     if pytesseract is None:
+        logger.warning("pytesseract is not importable — OCR will always return empty text.")
         return ""
     try:
         return pytesseract.image_to_string(processed)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Tesseract OCR call failed: %s", exc)
         return ""
-
 
 def _extract_fields_from_text(text: str) -> dict:
     fields = {"medicine_name": None, "batch_number": None, "manufacture_date": None, "expiry_date": None}
