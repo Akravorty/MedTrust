@@ -13,17 +13,21 @@ from services.agents.router import router as agent_router
 from data.generate_supplier import generate_suppliers
 from data.golden_batches import generate_batches
 from data.seed_recall_demo import generate_recall_demo
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="MediTrust")
-
-
-@app.on_event("startup")
-def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
     conn = get_connection()
     generate_suppliers(conn)   # idempotent — safe to call every startup
     generate_batches(conn)     # idempotent — safe to call every startup
     generate_recall_demo(conn) # idempotent — safe to call every startup
+    yield
+    
+app = FastAPI(title="MediTrust", lifespan=lifespan)
+
+
+
 
 app.include_router(risk_router)
 app.include_router(ledger_router)
