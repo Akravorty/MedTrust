@@ -46,22 +46,24 @@ def speak_alert(status: str, language: str = "HI", voice_id: str = "EXAVITQu4vr4
         raise ValueError(f"Invalid status '{status}' or language '{language}' specified.")
 
     print(f"Generating audio for [{language}] - Status: {status}...")
-
-    # Generate speech using the multilingual model
-    audio = client.generate(
+    # Generate speech using the multilingual model (new SDK API)
+    audio = client.text_to_speech.convert(
         text=text,
-        voice=voice_id,
-        model="eleven_multilingual_v2"
+        voice_id=voice_id,
+        model_id="eleven_multilingual_v2",
+        output_format="mp3_44100_128",
     )
-
     # Determine file path inside data/audio/
     if not output_filename:
         output_filename = f"alert_{language.lower()}_{status.lower()}.mp3"
     
     file_path = AUDIO_DIR / output_filename
     
-    # Save the generated audio file
-    save(audio, str(file_path))
+    # audio is now a generator of byte chunks — write them directly
+    with open(file_path, "wb") as f:
+        for chunk in audio:
+            if chunk:
+                f.write(chunk)
     print(f"Audio successfully saved to: {file_path}")
     return file_path
 
