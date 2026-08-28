@@ -2,12 +2,6 @@ from __future__ import annotations
 import os
 import shutil
 import re
-import numpy as np
-import cv2
-from __future__ import annotations
-import os
-import shutil
-import re
 import logging
 import numpy as np
 import cv2
