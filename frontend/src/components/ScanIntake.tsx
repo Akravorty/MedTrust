@@ -47,6 +47,10 @@ function playBeep() {
   } catch { /* AudioContext blocked */ }
 }
 
+/* Shortened fake "processing" animation (was 1800 + 600 ms). */
+const SCAN_PHASE_MS = 500;
+const VERIFY_PHASE_MS = 400;
+
 export default function ScanIntake({ onScanComplete }: Props) {
   /* ── state ── */
   const [scanning, setScanning]             = useState(false);
@@ -65,11 +69,11 @@ export default function ScanIntake({ onScanComplete }: Props) {
   const codeReaderRef   = useRef<BrowserMultiFormatReader | null>(null);
   const animFrameRef    = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
-  const scanTimerRef    = useRef<NodeJS.Timeout | null>(null);
+  const scanTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* ─── submit ─── */
-  const handleScanSubmit = useCallback((idToScan?: string) => {
-    const targetId = (idToScan ?? batchInput).trim();
+  const handleScanSubmit = useCallback(() => {
+    const targetId = batchInput.trim();
     if (!targetId || isProcessingRef.current) return;
     isProcessingRef.current = true;
     setScanning(true);
@@ -80,8 +84,8 @@ export default function ScanIntake({ onScanComplete }: Props) {
         setDone(false);
         isProcessingRef.current = false;
         onScanComplete(targetId);
-      }, 600);
-    }, 1800);
+      }, VERIFY_PHASE_MS);
+    }, SCAN_PHASE_MS);
   }, [batchInput, onScanComplete]);
 
   /* ─── stop all engines ─── */
@@ -102,7 +106,6 @@ export default function ScanIntake({ onScanComplete }: Props) {
       scanTimerRef.current = null;
     }
     setIsWebcamActive(false);
-    setDetectedCode(null);
   }, []);
 
   /* ─── barcode detected ─── */
@@ -115,8 +118,8 @@ export default function ScanIntake({ onScanComplete }: Props) {
     setDetectedCode(clean);
     setBatchInput(clean);
     stopWebcam();
-    handleScanSubmit(clean);
-  }, [handleScanSubmit, stopWebcam]);
+    inputRef.current?.focus(); // human confirms; camera misreads no longer auto-submit
+  }, [stopWebcam]);
 
   /* ─── start webcam ─── */
   const startWebcam = async () => {
@@ -130,6 +133,7 @@ export default function ScanIntake({ onScanComplete }: Props) {
         await videoRef.current.play();
       }
       setIsWebcamActive(true);
+      setDetectedCode(null);
       setScanTimeoutMsg(null);
 
       scanTimerRef.current = setTimeout(() => {
@@ -236,7 +240,7 @@ export default function ScanIntake({ onScanComplete }: Props) {
         {detectedCode && (
           <div className="detected-qr-badge animate-fade-in" style={{ zIndex: 4 }}>
             <CheckCircle2 size={13} color="#10b981" />
-            <span>QR DETECTED: <strong>{detectedCode}</strong></span>
+            <span>QR DETECTED: <strong>{detectedCode}</strong> — press Enter or Extract &amp; Verify to confirm</span>
           </div>
         )}
 

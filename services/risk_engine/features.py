@@ -24,6 +24,11 @@ Missing-value policy (documented, not silent):
     physical_inspection_flag_count -> 0 if notes absent/empty.
     days_since_manufacture       -> imputed median if manufacture_date missing.
     batch_size                   -> imputed median if not tracked yet.
+    shelf_life_remaining_pct     -> days_left / total_shelf_life_days, imputed
+                                     median if either date is missing, or if
+                                     the dates make the denominator <= 0
+                                     (manufacture_date on/after expiry_date is
+                                     malformed data, not a 0%/negative value).
 
 NOTE on supplier_reject_rate defaulting to 0.0: this only happens when a
 supplier truly has no batch history (Supplier.total_batches_supplied == 0),
@@ -48,11 +53,18 @@ from shared.schemas import Batch, Supplier
 class FeatureImputationDefaults:
     """Median values computed once at training time and reused at inference,
     so train/inference preprocessing never drifts. Loaded from
-    model_metadata.json — see training/train_model.py."""
+    model_metadata.json — see training/train_model.py.
+
+    shelf_life_remaining_pct_median has a literal default (0.5) rather than
+    being required: it lets any code (including existing tests) that
+    constructs this dataclass without knowing about the newer feature keep
+    working unchanged. A freshly trained model always supplies the real
+    dataset median via model_metadata.json, overriding this default."""
     days_to_expiry_median: float
     ocr_qr_match_score_median: float
     days_since_manufacture_median: float
     batch_size_median: float
+    shelf_life_remaining_pct_median: float = 0.5
 
 
 def _days_between(start: date, end: date) -> int:
@@ -83,6 +95,20 @@ def _inspection_flag_count(batch: Batch) -> int:
     separators_normalized = notes.replace("\n", ";")
     parts = [p.strip() for p in separators_normalized.split(";")]
     return len([p for p in parts if p])
+
+
+def _shelf_life_remaining_pct(batch: Batch, eval_date: date) -> Optional[float]:
+    """days_left / total_shelf_life_days. None (imputed) when either date is
+    missing, or when manufacture_date is on/after expiry_date -- that's
+    malformed data, not a real 0%/negative value, so it must not be
+    fabricated as one."""
+    if batch.expiry_date is None or batch.manufacture_date is None:
+        return None
+    total_shelf_life_days = (batch.expiry_date - batch.manufacture_date).days
+    if total_shelf_life_days <= 0:
+        return None
+    days_left = (batch.expiry_date - eval_date).days
+    return days_left / total_shelf_life_days
 
 
 def extract_raw_features(
@@ -122,6 +148,7 @@ def extract_raw_features(
         "days_since_manufacture": days_since_manufacture,
         "batch_size": None,  # batch_size is not yet in shared Batch schema —
                               # see note below.
+        "shelf_life_remaining_pct": _shelf_life_remaining_pct(batch, eval_date),
     }
     return raw
 
@@ -148,6 +175,7 @@ def apply_imputation(raw: dict, defaults: FeatureImputationDefaults) -> list:
         "physical_inspection_flag_count": raw["physical_inspection_flag_count"],
         "days_since_manufacture": raw["days_since_manufacture"] if raw["days_since_manufacture"] is not None else defaults.days_since_manufacture_median,
         "batch_size": raw["batch_size"] if raw["batch_size"] is not None else defaults.batch_size_median,
+        "shelf_life_remaining_pct": raw["shelf_life_remaining_pct"] if raw["shelf_life_remaining_pct"] is not None else defaults.shelf_life_remaining_pct_median,
     }
     return [resolved[name] for name in config.FEATURE_ORDER]
 

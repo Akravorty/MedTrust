@@ -42,6 +42,16 @@ OCR_QR_SEVERE_MISMATCH_THRESHOLD = 0.4
 SEVERE_MISMATCH_DECISION = "REJECT"  # "REJECT" or "HOLD" — single source of truth
 
 # ---------------------------------------------------------------------------
+# RULE 4 — near-expiry (soft warning short of the hard expiry rule below)
+# ---------------------------------------------------------------------------
+# A batch with fewer than this many days of shelf life left is not yet
+# expired (RULE_EXPIRED_BATCH still owns that, and still wins — see
+# rules.py's pipeline order) but is close enough that it should not sail
+# through as an ordinary ACCEPT. CHOSEN OUTCOME: HOLD, not REJECT — this is
+# a shelf-life-remaining warning, not a safety failure.
+NEAR_EXPIRY_DAYS_THRESHOLD = 90
+
+# ---------------------------------------------------------------------------
 # RULE 2 — missing cold-chain evidence
 # ---------------------------------------------------------------------------
 # ASSUMPTION / KNOWN SCHEMA GAP (flagging per master-doc rule: "if something
@@ -82,7 +92,10 @@ MODEL_ARTIFACT_FILENAME = "xgb_risk_model.json"
 MODEL_METADATA_FILENAME = "model_metadata.json"
 
 # Ordered feature list — order is load-bearing. Training and inference MUST
-# use this exact order. Do not reorder without retraining.
+# use this exact order. Do not reorder without retraining. shelf_life_
+# remaining_pct was appended (not inserted) on purpose: appending preserves
+# every existing feature's index, so this is a strictly additive change to
+# retrain around, not a reordering.
 FEATURE_ORDER = (
     "days_to_expiry",
     "temp_log_deviation_count",
@@ -92,6 +105,7 @@ FEATURE_ORDER = (
     "physical_inspection_flag_count",
     "days_since_manufacture",
     "batch_size",
+    "shelf_life_remaining_pct",
 )
 
 RANDOM_SEED = 42
@@ -101,3 +115,10 @@ RANDOM_SEED = 42
 # ---------------------------------------------------------------------------
 ERR_BATCH_NOT_FOUND = "Batch not found"
 ERR_RISK_UNAVAILABLE = "Risk evaluation unavailable"
+
+# --- Alerting (Step 8) -------------------------------------------------
+# Who receives a HOLD/REJECT alert, and in which language. Hard-coded for
+# the prototype: a real deployment reads this per-facility from a roster
+# table rather than a module constant.
+DEFAULT_ALERT_RECIPIENT = "pharmacist-on-duty"
+DEFAULT_ALERT_LANGUAGE = "HI"

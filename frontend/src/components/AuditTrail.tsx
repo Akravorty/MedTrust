@@ -9,7 +9,7 @@ export default function AuditTrail({ batchId }: { batchId: string }) {
   const [verified, setVerified] = useState(false);
 
   useEffect(() => {
-    getTrace(batchId).then(setEvents);
+    getTrace(batchId).then(setEvents).catch(() => setEvents([]));
   }, [batchId]);
 
   const handleVerify = async () => {

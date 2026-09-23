@@ -22,19 +22,30 @@ def _generate_synthetic_training_data(n_samples: int = 3000, seed: int = config.
     days_since_mfg = rng.integers(1, 900, size=n).astype(float)
     batch_size = rng.integers(50, 5000, size=n).astype(float)
 
+    # Total shelf life (manufacture -> expiry) independent of days_to_expiry,
+    # which is measured from *today*, not from manufacture. A short total
+    # shelf life with little of it remaining is a stronger risk signal than
+    # the same days_to_expiry on a long-shelf-life product, so this is a
+    # genuinely different feature from days_to_expiry, not a rescaling of it.
+    total_shelf_life_days = rng.integers(180, 1095, size=n).astype(float)
+    shelf_life_remaining_pct = days_to_expiry / total_shelf_life_days
+
     risk_signal = (
         -0.004 * days_to_expiry + 0.35 * temp_dev + 3.0 * reject_3mo
         + 2.0 * reject_6mo + 2.5 * (1.0 - ocr_qr_match) + 0.25 * inspection_flags
+        - 0.6 * shelf_life_remaining_pct
         + rng.normal(0, 0.4, size=n)
     )
     threshold = np.quantile(risk_signal, 0.75)
     label = (risk_signal > threshold).astype(int)
 
     X = np.column_stack([days_to_expiry, temp_dev, reject_3mo, reject_6mo,
-                          ocr_qr_match, inspection_flags, days_since_mfg, batch_size])
+                          ocr_qr_match, inspection_flags, days_since_mfg, batch_size,
+                          shelf_life_remaining_pct])
     return X, label, {
         "days_to_expiry": days_to_expiry, "ocr_qr_match_score": ocr_qr_match,
         "days_since_manufacture": days_since_mfg, "batch_size": batch_size,
+        "shelf_life_remaining_pct": shelf_life_remaining_pct,
     }
 
 
@@ -74,6 +85,7 @@ def main() -> None:
             "ocr_qr_match_score_median": float(np.median(medians_source["ocr_qr_match_score"])),
             "days_since_manufacture_median": float(np.median(medians_source["days_since_manufacture"])),
             "batch_size_median": float(np.median(medians_source["batch_size"])),
+            "shelf_life_remaining_pct_median": float(np.median(medians_source["shelf_life_remaining_pct"])),
         },
         "metrics": metrics,
         "notes": "Prototype model trained on synthetic data modeling realistic failure patterns; deployment would require validated hospital data, calibration and clinical validation.",

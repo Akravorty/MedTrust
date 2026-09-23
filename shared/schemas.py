@@ -10,6 +10,27 @@ class BatchStatus(str, Enum):
     REJECTED = "REJECTED"
     MANUAL_REVIEW = "MANUAL_REVIEW"
 
+
+class Decision(str, Enum):
+    """The risk engine's decision vocabulary.
+
+    Deliberately distinct from BatchStatus: a decision is what the engine
+    concluded, a status is what the batch row records. They are spelled
+    differently (ACCEPT vs ACCEPTED, REJECT vs REJECTED) and must be
+    translated through DECISION_TO_STATUS below -- never by passing one
+    into the other's constructor.
+    """
+    ACCEPT = "ACCEPT"
+    HOLD = "HOLD"
+    REJECT = "REJECT"
+
+
+DECISION_TO_STATUS: dict[str, BatchStatus] = {
+    Decision.ACCEPT: BatchStatus.ACCEPTED,
+    Decision.HOLD: BatchStatus.HOLD,
+    Decision.REJECT: BatchStatus.REJECTED,
+}
+
 class TempLogEntry(BaseModel):
     timestamp: datetime
     temp_c: float

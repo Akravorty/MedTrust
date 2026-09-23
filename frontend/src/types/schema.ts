@@ -12,6 +12,12 @@ export interface BatchDecision {
   confidence: number;
   features: ShapFeature[];
   timestamp: string;
+  // Added for Step 6 — present on every real /risk/evaluate response.
+  // Optional so existing mocks/tests that don't set them still type-check.
+  risk_score?: number;
+  triggered_rule?: string | null;
+  reasons?: string[];
+  model_version?: string;
 }
 
 export interface QAResponse {

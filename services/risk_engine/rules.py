@@ -27,6 +27,7 @@ from services.risk_engine import config
 from shared.schemas import Batch, Supplier
 
 RULE_EXPIRED_BATCH = "RULE_EXPIRED_BATCH"
+RULE_NEAR_EXPIRY = "RULE_NEAR_EXPIRY"
 RULE_MISSING_COLD_CHAIN = "RULE_MISSING_COLD_CHAIN"
 RULE_SEVERE_IDENTITY_MISMATCH = "RULE_SEVERE_IDENTITY_MISMATCH"
 
@@ -79,6 +80,32 @@ def _rule_expired_batch(batch: Batch, evaluation_date: date) -> RuleResult:
     return _no_trigger()
 
 
+def _rule_near_expiry(batch: Batch, evaluation_date: date) -> RuleResult:
+    """
+    Soft warning, distinct from _rule_expired_batch above: a batch that has
+    NOT yet expired but has fewer than config.NEAR_EXPIRY_DAYS_THRESHOLD days
+    of shelf life left. Because this runs after _rule_expired_batch in the
+    pipeline and the pipeline stops at the first trigger, an already-expired
+    batch is caught by that rule first and never reaches this one --
+    days_left is guaranteed non-negative here.
+    """
+    if batch.expiry_date is None:
+        # Same rationale as _rule_expired_batch: a missing expiry date is a
+        # data-quality gap for the ML path to handle, not a hard rule.
+        return _no_trigger()
+
+    days_left = (batch.expiry_date - evaluation_date).days
+    if 0 <= days_left < config.NEAR_EXPIRY_DAYS_THRESHOLD:
+        return RuleResult(
+            triggered=True,
+            rule_id=RULE_NEAR_EXPIRY,
+            decision="HOLD",
+            reason=f"Only {days_left} days of shelf life remaining.",
+            severity="moderate",
+        )
+    return _no_trigger()
+
+
 def _rule_missing_cold_chain(batch: Batch) -> RuleResult:
     if not _requires_cold_chain(batch):
         return _no_trigger()
@@ -120,11 +147,13 @@ def _rule_severe_identity_mismatch(batch: Batch) -> RuleResult:
     return _no_trigger()
 
 
-# Deterministic evaluation order. Expiry is checked first because it is the
-# most unambiguous safety condition; identity mismatch second because it
-# undermines trust in every other field; cold-chain evidence last.
+# Deterministic evaluation order. Expiry (expired, then near-expiry) is
+# checked first because it is the most unambiguous safety condition;
+# identity mismatch next because it undermines trust in every other field;
+# cold-chain evidence last.
 _RULE_PIPELINE = (
     _rule_expired_batch,
+    _rule_near_expiry,
     _rule_severe_identity_mismatch,
     _rule_missing_cold_chain,
 )
@@ -143,7 +172,7 @@ def evaluate_rules(
     eval_date = evaluation_date or date.today()
 
     for rule_fn in _RULE_PIPELINE:
-        if rule_fn is _rule_expired_batch:
+        if rule_fn in (_rule_expired_batch, _rule_near_expiry):
             result = rule_fn(batch, eval_date)
         else:
             result = rule_fn(batch)

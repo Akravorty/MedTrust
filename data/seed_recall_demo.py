@@ -17,7 +17,14 @@ from services.intake import storage
 from services.ledger.service import log_event
 from shared.schemas import Batch, BatchStatus
 
-DISTRIBUTION_PATH = ["Central Store", "Pharmacy Store B", "Ward 3", "Ward 7"]
+# Step 7: each stop now carries facility_id and a named recipient, so
+# recall can answer "who signed for this, where" instead of listing places.
+DISTRIBUTION_PATH = [
+    {"location": "Central Store",    "facility_id": "PHC-CENTRAL", "recipient": "R. Mahato (Store Keeper)"},
+    {"location": "Pharmacy Store B", "facility_id": "PHC-PHARM-B", "recipient": "S. Behera (Pharmacist)"},
+    {"location": "Ward 3",           "facility_id": "PHC-WARD-03", "recipient": "Sr. A. Das (Ward Nurse)"},
+    {"location": "Ward 7",           "facility_id": "PHC-WARD-07", "recipient": "Sr. M. Patra (Ward Nurse)"},
+]
 
 
 def generate_recall_demo(conn) -> None:
@@ -45,14 +52,22 @@ def generate_recall_demo(conn) -> None:
     else:
         print("DEMO-RECALL already exists, skipping")
 
-    for i, location in enumerate(DISTRIBUTION_PATH):
+    for i, stop in enumerate(DISTRIBUTION_PATH):
         log_event(
             conn,
             batch_id="DEMO-RECALL",
-            actor="system-demo-seed",
+            actor=stop["recipient"],
             action="DISTRIBUTION_EVENT",
-            payload={"location": location, "sequence": i},
-            idempotency_key=f"demo-recall-dist-{i}",
+            payload={
+                "location": stop["location"],
+                "facility_id": stop["facility_id"],
+                "recipient": stop["recipient"],
+                "sequence": i,
+            },
+            # Bumped to -v2: the -v1 keys already exist in any database
+            # seeded before Step 7, and idempotency would otherwise skip
+            # the richer payload entirely, leaving recall with old rows.
+            idempotency_key=f"demo-recall-dist-v2-{i}",
         )
 
     print("Distribution history seeded for DEMO-RECALL.")
