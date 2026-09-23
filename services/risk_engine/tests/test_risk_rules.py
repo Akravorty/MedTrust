@@ -39,11 +39,46 @@ def test_expired_batch_rejected():
     assert result.decision == "REJECT"
 
 
-def test_expiring_today_is_not_expired():
-    # Expiry == evaluation date is not yet "before" it -> should not fire.
+def test_expiring_today_is_not_a_hard_expiry_rejection():
+    # Expiry == evaluation date is not yet "before" it, so RULE_EXPIRED_BATCH
+    # does not fire -- but 0 days left is squarely inside the near-expiry
+    # window, so RULE_NEAR_EXPIRY (HOLD) fires instead. Before Step 5 this
+    # case triggered no rule at all; now it does, on purpose.
     batch = make_batch(expiry_date=date.today())
     result = rules.evaluate_rules(batch)
+    assert result.triggered
+    assert result.rule_id == rules.RULE_NEAR_EXPIRY
+    assert result.decision == "HOLD"
+
+
+def test_near_expiry_holds():
+    batch = make_batch(expiry_date=date.today() + timedelta(days=30))
+    result = rules.evaluate_rules(batch)
+    assert result.triggered
+    assert result.rule_id == rules.RULE_NEAR_EXPIRY
+    assert result.decision == "HOLD"
+
+
+def test_just_outside_near_expiry_window_does_not_trigger():
+    batch = make_batch(expiry_date=date.today() + timedelta(days=90))
+    result = rules.evaluate_rules(batch)
     assert not result.triggered
+
+
+def test_well_outside_near_expiry_window_does_not_trigger():
+    batch = make_batch(expiry_date=date.today() + timedelta(days=300))
+    result = rules.evaluate_rules(batch)
+    assert not result.triggered
+
+
+def test_expired_wins_over_near_expiry():
+    # An already-expired batch is also "less than 90 days left" in a naive
+    # reading, but _rule_expired_batch runs first in the pipeline and the
+    # pipeline stops at the first trigger, so REJECT wins, never HOLD.
+    batch = make_batch(expiry_date=date.today() - timedelta(days=1))
+    result = rules.evaluate_rules(batch)
+    assert result.rule_id == rules.RULE_EXPIRED_BATCH
+    assert result.decision == "REJECT"
 
 
 def test_missing_cold_chain_evidence_holds():

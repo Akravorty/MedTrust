@@ -1,13 +1,12 @@
- node_modules/
- __pycache__/
- *.pyc
- .env
- meditrust.db
- *.db-journal
- .pytest_cache/
- venv/
- .venv/
- meditrust.db-shm
- meditrust.db-wal
--.env
-+*.db
+node_modules/
+__pycache__/
+*.pyc
+.env
+frontend/.env
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.pytest_cache/
+venv/
+.venv/

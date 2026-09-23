@@ -1,190 +1,172 @@
-import { BatchDecision, QAResponse, TraceEvent, Status } from '../types/schema';
+import { BatchDecision, QAResponse, TraceEvent } from '../types/schema';
 
-// Mock delays for scan/trace endpoints
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+const API_BASE = import.meta.env.VITE_API_BASE as string;
 
-// ── Deterministic risk generator ─────────────────────────────────────────────
-export const getBatchRiskData = (batchId: string, forceStatus?: Status): BatchDecision => {
-  const upper = batchId.toUpperCase();
+// ── Risk evaluation (was: hash-the-string mock) ─────────────────────────────
+export const scanBatch = async (
+  batchId: string,
+  idempotencyKey?: string,
+): Promise<BatchDecision> => {
+  const res = await fetch(`${API_BASE}/risk/evaluate/${encodeURIComponent(batchId)}`, {
+    method: 'POST',
+    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+  });
 
-  let status: Status = 'HOLD';
-  let confidence = 0.64;
-
-  if (forceStatus) {
-    status = forceStatus;
-    confidence = status === 'ACCEPT' ? 0.96 : status === 'REJECT' ? 0.98 : 0.64;
-  } else if (upper.includes('702') || upper.includes('ACCEPT') || upper.includes('PASS') || upper.includes('334') || upper.includes('289')) {
-    status = 'ACCEPT';
-    confidence = 0.94;
-  } else if (upper.includes('410') || upper.includes('REJECT') || upper.includes('FAIL')) {
-    status = 'REJECT';
-    confidence = 0.97;
-  } else if (upper.includes('RECALL')) {
-    status = 'RECALL';
-    confidence = 0.99;
-  } else {
-    let hash = 0;
-    for (let i = 0; i < upper.length; i++) {
-      hash = (hash << 5) - hash + upper.charCodeAt(i);
-      hash |= 0;
-    }
-    const absHash = Math.abs(hash);
-    const mod = absHash % 3;
-    status = mod === 0 ? 'HOLD' : mod === 1 ? 'ACCEPT' : 'REJECT';
-    confidence = 0.62 + (absHash % 35) / 100;
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.detail || `Risk evaluation failed (${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
 
-  const features = [
-    { feature_name: 'temp_exc',       display_label: 'Temperature excursion',    value: status === 'REJECT' ? 0.78 : status === 'HOLD' ? 0.38 : 0.04 },
-    { feature_name: 'supp_trend',     display_label: 'Supplier trend deviation', value: status === 'REJECT' ? 0.62 : status === 'HOLD' ? 0.22 : 0.08 },
-    { feature_name: 'viscosity_drift',display_label: 'Viscosity & pH drift',     value: status === 'REJECT' ? 0.54 : status === 'HOLD' ? 0.16 : 0.02 },
-    { feature_name: 'ocr_mismatch',   display_label: 'OCR / Seal integrity',     value: status === 'REJECT' ? 0.45 : status === 'HOLD' ? 0.11 : 0.01 },
-  ];
+  const d = await res.json();
 
   return {
-    batch_id: batchId,
-    status,
-    confidence: Number(confidence.toFixed(2)),
-    timestamp: new Date().toISOString(),
-    features,
+    batch_id: d.batch_id,
+    status: d.decision,                      // "ACCEPT" | "HOLD" | "REJECT"
+    confidence: Number((1 - d.risk_score).toFixed(2)),
+    risk_score: d.risk_score,
+    triggered_rule: d.triggered_rule,
+    reasons: d.reasons,
+    model_version: d.model_version,
+    timestamp: d.decided_at,
+    features: (d.shap_contributors ?? []).map((c: { feature: string; display_label: string; contribution: number }) => ({
+      feature_name: c.feature,
+      display_label: c.display_label,
+      value: c.contribution,
+    })),
   };
 };
 
-export const scanBatch = async (batchId: string, forceStatus?: Status): Promise<BatchDecision> => {
-  await delay(600);
-  return getBatchRiskData(batchId, forceStatus);
+// ── QA agent — calls the real Gemini tool-using agent, not Groq ────────────
+// POST /agent/qa only takes {query: string}. It resolves its own evidence
+// via get_batch/get_decision/get_trace tools, so the batch_id has to be
+// inside the query text itself, not passed as a separate structured field.
+const CONFIDENCE_MAP: Record<string, number> = {
+  HIGH: 0.95,
+  MEDIUM: 0.65,
+  INSUFFICIENT_EVIDENCE: 0.3,
 };
 
-// ── Groq LLM integration ─────────────────────────────────────────────────────
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
-const GROQ_MODEL = 'openai/gpt-oss-120b';
-
-/**
- * Sends the user's question to Groq LLM with a MediTrust QA system prompt
- * built from the live batch context. All responses are dynamic — no static text.
- */
 export const askAgent = async (
   batchData: BatchDecision,
   question: string,
   history: Array<{ role: 'user' | 'agent'; text: string }> = [],
 ): Promise<QAResponse> => {
-
-  // ── Guard: no API key ────────────────────────────────────────────────────
-  if (!GROQ_API_KEY) {
+  if (!batchData?.batch_id) {
     return {
-      answer:
-        '⚠️ **API key not configured.**\n\n' +
-        'Add `VITE_GROQ_API_KEY=<your-groq-key>` to a `.env` file at the project root, then restart the dev server.\n\n' +
-        'Get a free key at https://console.groq.com',
+      answer: '❌ **System Error:** No valid batch is loaded to ask about.',
       confidence: 0,
       evidence_sources: [],
     };
   }
 
-  // ── Guard: no batch data ──────────────────────────────────────────────────
-  if (!batchData || !batchData.batch_id) {
-    return {
-      answer: '❌ **System Error:** No valid Batch ID was provided in the input parameters. Please provide a valid batch to proceed.',
-      confidence: 0,
-      evidence_sources: [],
-    };
-  }
+  const recentHistory = history
+    .slice(-6)
+    .map(m => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.text}`)
+    .join('\n');
 
-  // ── Build system prompt with live batch context ──────────────────────────
-  const systemPrompt = `You are the MediTrust QA Agent. Your role is to explain batch quality decisions strictly using the provided active payload state.
-
-INPUT VALIDATION:
-- ALWAYS ensure \`batchId\` is defined in the input parameters. 
-- If \`batchId\` is missing, return a clean structural error asking the system to provide a valid Batch ID.
-
-STATE-BASED RESPONSE RULES:
-1. Detect \`batch.status\` from the payload and structure the response accordingly:
-
-   • STATUS = "ACCEPT":
-     - State that the batch passed quality standards.
-     - Confirm key SHAP risk factors (Temperature Excursion, Supplier Trend, Viscosity/pH Drift, OCR/Seal Integrity) are at safe, minimal levels (below 0.08).
-     - State the high confidence score (e.g., 96.0%).
-
-   • STATUS = "REJECT":
-     - State that the batch failed quality standards.
-     - Highlight specific elevated risk scores triggering the rejection (e.g., Temperature Excursion > 0.70).
-
-   • STATUS = "HOLD":
-     - State that the batch is quarantined pending manual inspector review.
-     - Detail border-line or conflicting risk parameters requiring secondary verification.
-
-2. NEVER hallucinate metrics or status values from a different state.
-
-INPUT CONTEXT:
-- Batch ID: ${batchData.batch_id}
-- Status: ${batchData.status}
-- Confidence: ${(batchData.confidence * 100).toFixed(1)}%
-- SHAP Scores: ${JSON.stringify(batchData.features)}`;
-
-  const contextPrompt = `Explain why this exact decision was made, using only the data payload above.`;
-
-  // Map 'agent' → 'assistant' for OpenAI-compatible Groq API format
-  const historyMessages = history.slice(-10).map(m => ({
-    role: (m.role === 'agent' ? 'assistant' : 'user') as 'user' | 'assistant',
-    content: m.text,
-  }));
+  const composedQuery = [
+    `The question below is about batch ${batchData.batch_id} (currently shown as ${batchData.status} on screen — verify this against the actual decision record, don't trust it blindly).`,
+    recentHistory,
+    `User: ${question}`,
+  ].filter(Boolean).join('\n');
 
   try {
-    const response = await fetch(GROQ_API_URL, {
+    const res = await fetch(`${API_BASE}/agent/qa`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages: [
-          { role: 'system',    content: systemPrompt },
-          { role: 'user',      content: contextPrompt },
-          ...historyMessages,
-          { role: 'user',      content: question },
-        ],
-        temperature: 0.3,
-        max_tokens: 600,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: composedQuery }),
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Groq API ${response.status}: ${errText}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Agent request failed (${res.status})`);
     }
 
-    const data = await response.json();
-    const answer: string = data.choices?.[0]?.message?.content ?? 'No response received from agent.';
+    const data = await res.json();
 
     return {
-      answer,
-      // LLM doesn't return calibrated confidence; use a fixed indicator
-      confidence: 0.92,
-      evidence_sources: [`GroqLLM/${GROQ_MODEL}`, `BatchData/${batchData.batch_id}`],
+      answer: data.answer ?? 'No response received from agent.',
+      confidence: CONFIDENCE_MAP[data.confidence] ?? 0.5,
+      evidence_sources: data.evidence_sources ?? [],
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return {
-      answer: `❌ **Agent error:** ${msg}\n\nCheck your API key and network connection, then retry.`,
+      answer: `❌ **Agent error:** ${msg}\n\nCheck that the backend is running and GEMINI_API_KEY is set in its .env, then retry.`,
       confidence: 0,
       evidence_sources: [],
     };
   }
 };
 
-// ── Trace & chain endpoints (unchanged) ─────────────────────────────────────
+// ── Ledger trace & chain verification ───────────────────────────────────────
+// GET /ledger/trace/{batch_id} returns {events, chain_valid, ...} in one
+// call — there's no separate verify endpoint, so verifyChain reads
+// chain_valid off the same response rather than hitting a second route.
 export const getTrace = async (batchId: string): Promise<TraceEvent[]> => {
-  await delay(800);
-  return [
-    { id: '1', timestamp: '2026-08-20T13:30:00Z', location: 'Mfg Facility Alpha', action: 'Manufactured', verified: true },
-    { id: '2', timestamp: '2026-08-21T20:00:00Z', location: 'Logistics Hub 1',    action: 'In Transit',  verified: true },
-    { id: '3', timestamp: '2026-08-23T14:45:00Z', location: 'Hospital Receiving', action: 'Arrived',     verified: true },
-  ];
+  const res = await fetch(`${API_BASE}/ledger/trace/${encodeURIComponent(batchId)}`);
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Failed to load trace (${res.status})`);
+  }
+
+  const data = await res.json();
+
+  return data.events.map((e: { event_id: string; timestamp: string; actor: string; action: string }) => ({
+    id: e.event_id,
+    timestamp: e.timestamp,
+    location: e.actor,          // the ledger tracks actors, not physical locations
+    action: e.action,
+    verified: data.chain_valid,
+  }));
 };
 
-export const verifyChain = async (_batchId: string): Promise<boolean> => {
-  await delay(1200);
-  return true;
+export const verifyChain = async (batchId: string): Promise<boolean> => {
+  const res = await fetch(`${API_BASE}/ledger/trace/${encodeURIComponent(batchId)}`);
+  if (!res.ok) return false;
+  const data = await res.json();
+  return Boolean(data.chain_valid);
+};
+
+// ── Recall simulation ───────────────────────────────────────────────────────
+export const simulateRecall = async (
+  batchId: string,
+  triggeredBy: string = 'ui_operator',
+): Promise<{ recipients: string[]; affected_departments: string[]; [key: string]: unknown }> => {
+  const res = await fetch(`${API_BASE}/ledger/recall/simulate/${encodeURIComponent(batchId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ triggered_by: triggeredBy }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Recall simulation failed (${res.status})`);
+  }
+
+  return res.json();
+};
+
+// ── Alerts (Step 8) ─────────────────────────────────────────────────────────
+// GET /alerts/{batch_id} -> { batch_id, alerts: [...] }, newest first.
+export interface AlertRecord {
+  alert_id: string;
+  batch_id: string;
+  recipient: string;
+  channel: string;      // "LOG" | "SMS"
+  language: string;     // "HI" | "OR" | "EN"
+  alert_type: string;   // "HOLD" | "REJECT" | "RECALL"
+  message: string;
+  status: string;       // "SENT" | "QUEUED"
+  created_at: string;
+}
+
+export const getAlerts = async (batchId: string): Promise<AlertRecord[]> => {
+  const res = await fetch(`${API_BASE}/alerts/${encodeURIComponent(batchId)}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.alerts ?? [];
 };

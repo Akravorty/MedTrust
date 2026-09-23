@@ -15,6 +15,7 @@ from __future__ import annotations
 import sqlite3
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from shared.database import get_db
 from services.intake.service import (
@@ -22,12 +23,22 @@ from services.intake.service import (
     BatchNotFoundError,
     InvalidImageIntakeError,
     ManualReviewFinalizeError,
+    NotAcceptedError,
+    NotRiskEvaluatedError,
+    OverrideReasonRequiredError,
     finalize_batch,
     get_batch_or_raise,
     scan_batch,
 )
 
 router = APIRouter(prefix="/intake", tags=["intake"])
+
+
+class FinalizeRequest(BaseModel):
+    facility_id: str
+    received_by: str
+    role: str
+    override_reason: str | None = None
 
 
 def _db_dependency():
@@ -91,13 +102,36 @@ def get_batch_endpoint(batch_id: str, db: sqlite3.Connection = Depends(_db_depen
 
 
 @router.post("/batches/{batch_id}/finalize")
-def post_finalize(batch_id: str, db: sqlite3.Connection = Depends(_db_dependency)):
+def post_finalize(
+    batch_id: str,
+    body: FinalizeRequest,
+    db: sqlite3.Connection = Depends(_db_dependency),
+):
     try:
-        batch, already_finalized = finalize_batch(db, batch_id)
+        batch, already_finalized = finalize_batch(
+            db,
+            batch_id,
+            facility_id=body.facility_id,
+            received_by=body.received_by,
+            role=body.role,
+            override_reason=body.override_reason,
+        )
     except BatchNotFoundError:
         raise HTTPException(status_code=404, detail="Batch not found")
     except ManualReviewFinalizeError:
         raise HTTPException(status_code=422, detail="Batch requires manual review before it can be finalized")
+    except NotRiskEvaluatedError:
+        raise HTTPException(status_code=409, detail="Batch has not been risk evaluated")
+    except NotAcceptedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Batch was not accepted (decision: {exc.decision})",
+        )
+    except OverrideReasonRequiredError:
+        raise HTTPException(
+            status_code=422,
+            detail="Overriding a HOLD decision requires an override_reason",
+        )
 
     response = _batch_to_response(batch)
     response["already_finalized"] = already_finalized

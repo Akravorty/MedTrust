@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import ScanIntake from './components/ScanIntake';
 import DecisionScreen from './components/DecisionScreen';
 import ChatPanel from './components/ChatPanel';
@@ -7,8 +7,10 @@ import RecallFlow from './components/RecallFlow';
 import DemoToggle from './components/DemoToggle';
 import ActivityTicker from './components/ActivityTicker';
 import type { BatchDecision } from './types/schema';
-import { scanBatch } from './services/api';
-import { Activity, CheckCircle2, AlertTriangle, Moon, Sun, AlertOctagon, RotateCcw, ThermometerSnowflake, Boxes, Clock, Tag } from 'lucide-react';
+import { scanBatch, simulateRecall, getAlerts } from './services/api';
+import type { AlertRecord } from './services/api';
+import { enqueueScan, replayQueue, onReconnect, queueDepth } from './services/offlineQueue';
+import { Activity, CheckCircle2, AlertTriangle, Moon, Sun, AlertOctagon, RotateCcw, ThermometerSnowflake, Boxes, Clock, Tag, WifiOff } from 'lucide-react';
 
 export type AppState = 'SCANNING' | 'DECISION' | 'RECALLED';
 
@@ -70,37 +72,119 @@ function App() {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [decision, setDecision] = useState<BatchDecision | null>(null);
   const [isDark, setIsDark] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [scanMessage, setScanMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
+  const [recallResult, setRecallResult] = useState<Awaited<ReturnType<typeof simulateRecall>> | null>(null);
+  const [recallError, setRecallError] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
+  const [recallAlerts, setRecallAlerts] = useState<AlertRecord[]>([]);
 
+  const refreshQueueDepth = useCallback(() => {
+    queueDepth().then(setPendingCount);
+  }, []);
+
+  // On mount: show any scans already queued from a previous offline session.
+  // On reconnect: replay them (each carrying its own Idempotency-Key so a
+  // replay that the server already saw doesn't create a duplicate decision
+  // or a duplicate alert), then refresh the badge count either way.
+  useEffect(() => {
+    refreshQueueDepth();
+
+    const flush = async () => {
+      await replayQueue(async (queuedBatchId, idempotencyKey) => {
+        await scanBatch(queuedBatchId, idempotencyKey);
+      });
+      refreshQueueDepth();
+    };
+
+    const unsubscribe = onReconnect(flush);
+    return unsubscribe;
+  }, [refreshQueueDepth]);
+
+  // FIX: the old version switched to the DECISION screen *before* the result
+  // arrived and only rendered it when `decision` was set. Any failure (unknown
+  // batch ID -> 404, backend down, CORS) left `decision` null, so the page went
+  // blank with the error only in the console. Now we stay on the scanner and
+  // show the problem, and only switch screens once we have a real decision.
   const handleScanComplete = async (scannedBatchId: string) => {
-    setBatchId(scannedBatchId);
-    setAppState('DECISION');
+    if (isEvaluating) return;
+    setScanMessage(null);
+    setAlerts([]);
+    setIsEvaluating(true);
     try {
       const result = await scanBatch(scannedBatchId);
+      setBatchId(scannedBatchId);
       setDecision(result);
+      setAppState('DECISION');
+      // The backend records the alert before it responds, so it is readable now.
+      getAlerts(scannedBatchId).then(setAlerts).catch(() => setAlerts([]));
     } catch (error) {
       console.error('Error evaluating batch:', error);
+      const status = (error as { status?: number }).status;
+      if (!navigator.onLine) {
+        await enqueueScan(scannedBatchId);
+        refreshQueueDepth();
+        setScanMessage({
+          kind: 'info',
+          text: `You're offline. The scan for "${scannedBatchId}" is queued and will be sent when you reconnect.`,
+        });
+      } else if (status === 404) {
+        setScanMessage({
+          kind: 'error',
+          text: `Batch "${scannedBatchId}" was not found. Check the ID and try again (demo IDs: DEMO-ACCEPT, DEMO-HOLD, DEMO-REJECT).`,
+        });
+      } else {
+        const msg = error instanceof Error ? error.message : 'Unknown error';
+        setScanMessage({
+          kind: 'error',
+          text: `Could not evaluate "${scannedBatchId}": ${msg}. Is the backend running on ${import.meta.env.VITE_API_BASE}?`,
+        });
+      }
+    } finally {
+      setIsEvaluating(false);
     }
   };
 
-  const handleRecallTriggered = () => setAppState('RECALLED');
+  // FIX: the Recall button used to just flip the screen to a hard-coded
+  // banner. It now calls the real ledger recall endpoint so recipients show.
+  const runRecall = async (id: string) => {
+    setBatchId(id);
+    setRecallResult(null);
+    setRecallError(null);
+    setRecallAlerts([]);
+    try {
+      setRecallResult(await simulateRecall(id));
+      getAlerts(id).then(setRecallAlerts).catch(() => setRecallAlerts([]));
+    } catch (err) {
+      setRecallError(err instanceof Error ? err.message : 'Recall simulation failed');
+    }
+    setAppState('RECALLED');
+  };
+
+  const handleRecallTriggered = () => { if (batchId) runRecall(batchId); };
 
   const resetFlow = () => {
     setAppState('SCANNING');
     setBatchId(null);
     setDecision(null);
+    setScanMessage(null);
+    setRecallResult(null);
+    setRecallError(null);
+    setAlerts([]);
+    setRecallAlerts([]);
   };
 
+  // FIX: demo buttons used to call scanBatch('DEMO-BATCH-001', <status>), which
+  // was written for the old mock. That batch doesn't exist in the real backend
+  // and the status was being sent as the Idempotency-Key. The seeded demo batch
+  // IDs are exactly DEMO-ACCEPT / DEMO-HOLD / DEMO-REJECT / DEMO-RECALL.
   const handleDemoMode = (mode: string) => {
     if (mode === 'SCANNING') { resetFlow(); return; }
     if (!mode.startsWith('DEMO-')) return;
-    const forcedStatus = mode.split('-')[1] as 'ACCEPT' | 'HOLD' | 'REJECT' | 'RECALL';
-    setBatchId('DEMO-BATCH-001');
-    if (forcedStatus === 'RECALL') {
-      setAppState('RECALLED');
-    } else {
-      setAppState('DECISION');
-      scanBatch('DEMO-BATCH-001', forcedStatus).then(setDecision).catch(console.error);
-    }
+    if (mode === 'DEMO-RECALL') { runRecall('DEMO-RECALL'); return; }
+    setAppState('SCANNING');
+    handleScanComplete(mode);
   };
 
   return (
@@ -158,6 +242,27 @@ function App() {
             <span className="nav-title">MediTrust</span>
             <span className="nav-badge">Quality Gate</span>
           </div>
+
+          {pendingCount > 0 && (
+            <div
+              className="offline-queue-badge"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '999px',
+                background: '#fef3c7',
+                color: '#92400e',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+              }}
+            >
+              <WifiOff size={14} strokeWidth={2.2} />
+              <span>{pendingCount} scan{pendingCount > 1 ? 's' : ''} queued</span>
+            </div>
+          )}
+
           {batchId && appState !== 'SCANNING' && (
             <button className="btn-new-scan" onClick={resetFlow}>
               + New Scan
@@ -189,11 +294,43 @@ function App() {
       {/* ── Main content ── */}
       <main className="page-inner animate-fade-in" style={{ paddingTop: '2rem', paddingBottom: '4rem' }}>
 
-        {appState === 'SCANNING' && <ScanIntake onScanComplete={handleScanComplete} />}
+        {appState === 'SCANNING' && (
+          <>
+            {isEvaluating && (
+              <div style={{ maxWidth: '620px', margin: '0 auto 1rem', padding: '0.75rem 1rem', borderRadius: '8px', background: '#e0f2fe', color: '#075985', fontWeight: 600 }}>
+                Evaluating batch…
+              </div>
+            )}
+            {scanMessage && (
+              <div
+                role="alert"
+                style={{
+                  maxWidth: '620px', margin: '0 auto 1rem', padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 600,
+                  background: scanMessage.kind === 'error' ? '#fee2e2' : '#fef3c7',
+                  color: scanMessage.kind === 'error' ? '#991b1b' : '#92400e',
+                }}
+              >
+                {scanMessage.text}
+              </div>
+            )}
+            <ScanIntake onScanComplete={handleScanComplete} />
+          </>
+        )}
 
         {appState === 'DECISION' && decision && (
           <div className="flex-row gap-6" style={{ alignItems: 'flex-start' }}>
             <div className="flex-col gap-6" style={{ flex: 2 }}>
+              {alerts.length > 0 && (
+                <div className="card" role="status" style={{ borderLeft: '4px solid #ef4444' }}>
+                  <strong>Alert sent to {alerts[0].recipient}</strong>
+                  <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem', opacity: 0.75 }}>
+                    {alerts[0].channel} · {alerts[0].status} · {alerts[0].language}
+                  </span>
+                  <p lang={alerts[0].language.toLowerCase()} style={{ margin: '0.5rem 0 0', fontSize: '1.05rem' }}>
+                    {alerts[0].message}
+                  </p>
+                </div>
+              )}
               <DecisionScreen decision={decision} />
               <AuditTrail batchId={batchId!} />
               <RecallFlow batchId={batchId!} onRecallTriggered={handleRecallTriggered} />
@@ -239,7 +376,7 @@ function App() {
                 </div>
                 <div className="recall-info-content">
                   <span className="recall-info-label">ALERT TIMESTAMP</span>
-                  <span className="recall-info-value">17:26:00 UTC (LIVE)</span>
+                  <span className="recall-info-value">{recallResult?.triggered_at ? new Date(String(recallResult.triggered_at)).toLocaleString() : '—'}</span>
                 </div>
               </div>
 
@@ -249,7 +386,7 @@ function App() {
                 </div>
                 <div className="recall-info-content">
                   <span className="recall-info-label">AFFECTED UNITS</span>
-                  <span className="recall-info-value">4,200 Vials (Vault 3B)</span>
+                  <span className="recall-info-value">{recallResult ? `${recallResult.affected_departments.length} locations` : '—'}</span>
                 </div>
               </div>
 
@@ -259,10 +396,31 @@ function App() {
                 </div>
                 <div className="recall-info-content">
                   <span className="recall-info-label">PRIMARY REASON</span>
-                  <span className="recall-info-value recall-reason-tag">Temperature Excursion</span>
+                  <span className="recall-info-value recall-reason-tag">{recallResult ? `${recallResult.recipients.length} recipients notified` : 'Recall not confirmed'}</span>
                 </div>
               </div>
             </div>
+
+            {recallError && (
+              <p role="alert" style={{ color: '#991b1b', fontWeight: 600, margin: '1rem 0' }}>
+                Recall could not be simulated: {recallError}
+              </p>
+            )}
+            {recallResult && recallResult.recipients.length > 0 && (
+              <div style={{ margin: '1rem 0' }}>
+                <strong>Recall notice sent to:</strong>
+                <ul style={{ margin: '0.5rem 0 0 1.25rem' }}>
+                  {recallResult.recipients.map((r) => <li key={r}>{r}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {recallAlerts.length > 0 && (
+              <p style={{ margin: '1rem 0' }}>
+                <strong>{recallAlerts.length} alerts queued for SMS:</strong>{' '}
+                <span lang={recallAlerts[0].language.toLowerCase()}>{recallAlerts[0].message}</span>
+              </p>
+            )}
 
             {/* Actions */}
             <div className="recall-actions-row">

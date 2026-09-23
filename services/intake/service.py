@@ -72,7 +72,30 @@ class ManualReviewFinalizeError(IntakeError):
         super().__init__("Batch requires manual review before it can be finalized")
 
 
-# --------------------------------------------------------------- schema --
+class NotRiskEvaluatedError(IntakeError):
+    """Finalize attempted on a batch the risk engine has never seen."""
+    def __init__(self):
+        super().__init__("Batch has not been risk evaluated")
+
+
+class NotAcceptedError(IntakeError):
+    """Finalize attempted on a batch the risk engine rejected outright.
+    REJECT is never overridable at finalize time -- that is a safety
+    decision, not a quality-of-evidence one."""
+    def __init__(self, decision: str):
+        self.decision = decision
+        super().__init__(f"Batch was not accepted (decision: {decision})")
+
+
+class OverrideReasonRequiredError(IntakeError):
+    """A HOLD can be finalized by a human override, but only with a reason
+    on record. No reason, no override -- silent overrides defeat the point
+    of having a gate at all."""
+    def __init__(self):
+        super().__init__("Overriding a HOLD decision requires an override_reason")
+
+
+# ---------------------------------------------------------------- schema --
 
 def ensure_intake_schema(conn: sqlite3.Connection) -> None:
     storage.ensure_schema(conn)
@@ -245,15 +268,38 @@ def get_batch_or_raise(conn: sqlite3.Connection, batch_id: str) -> Batch:
 
 # -------------------------------------------------------------- finalize --
 
-def finalize_batch(conn: sqlite3.Connection, batch_id: str) -> tuple[Batch, bool]:
+def finalize_batch(
+    conn: sqlite3.Connection,
+    batch_id: str,
+    *,
+    facility_id: str,
+    received_by: str,
+    role: str,
+    override_reason: str | None = None,
+) -> tuple[Batch, bool]:
     """
     Idempotent finalize (Section 16). Returns (batch, was_already_finalized).
 
     - Batch does not exist -> BatchNotFoundError ("Batch not found")
     - Already finalized -> returns existing state, no duplicate ledger event
+      or receipt (idempotent: facility_id/received_by/role are still
+      required on the request, but are not re-recorded)
     - MANUAL_REVIEW -> ManualReviewFinalizeError; manual review can never
       silently become a successful verification
+    - Never risk-evaluated -> NotRiskEvaluatedError
+    - REJECT -> NotAcceptedError; never overridable at finalize time
+    - HOLD without override_reason -> OverrideReasonRequiredError
+    - HOLD with override_reason -> allowed; recorded as a human override
+    - ACCEPT -> allowed; override_reason is ignored if supplied
+
+    On success, writes a receipt row (services/risk_engine/storage.py)
+    identifying who received the batch, and logs the ledger's
+    BATCH_FINALIZED event with actor=received_by rather than a service
+    name, so the ledger records a person, not a component. This is the
+    e-signature: received_by + signed_at inside the hashed ledger payload.
     """
+    from services.risk_engine.storage import get_decision, save_receipt
+
     row = storage.get_batch_row(conn, batch_id)
     if row is None:
         raise BatchNotFoundError()
@@ -267,13 +313,50 @@ def finalize_batch(conn: sqlite3.Connection, batch_id: str) -> tuple[Batch, bool
     if batch.status == BatchStatus.MANUAL_REVIEW:
         raise ManualReviewFinalizeError()
 
+    decision = get_decision(conn, batch_id)
+    if decision is None:
+        logger.info("finalize_blocked_not_evaluated batch_id=%s", batch_id)
+        raise NotRiskEvaluatedError()
+
+    if decision.decision == "REJECT":
+        logger.info("finalize_blocked_rejected batch_id=%s", batch_id)
+        raise NotAcceptedError(decision.decision)
+
+    if decision.decision == "HOLD":
+        if not override_reason:
+            logger.info("finalize_blocked_no_override_reason batch_id=%s", batch_id)
+            raise OverrideReasonRequiredError()
+        logger.info(
+            "finalize_hold_overridden batch_id=%s received_by=%s role=%s",
+            batch_id, received_by, role,
+        )
+
+    signed_at = datetime.now(timezone.utc)
     storage.mark_finalized(conn, batch_id)
+    save_receipt(
+        conn,
+        receipt_id=str(uuid.uuid4()),
+        batch_id=batch_id,
+        facility_id=facility_id,
+        received_by=received_by,
+        role=role,
+        decision=decision.decision,
+        override_reason=override_reason if decision.decision == "HOLD" else None,
+        signed_at=signed_at,
+    )
     send_ledger_event(
         conn,
         batch_id=batch_id,
-        actor="intake_service",
+        actor=received_by,
         action="BATCH_FINALIZED",
-        payload={"status": batch.status.value},
+        payload={
+            "status": batch.status.value,
+            "facility_id": facility_id,
+            "role": role,
+            "decision": decision.decision,
+            "override_reason": override_reason if decision.decision == "HOLD" else None,
+            "signed_at": signed_at.isoformat(),
+        },
     )
     logger.info("batch_finalized batch_id=%s", batch_id)
     return batch, False

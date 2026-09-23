@@ -29,11 +29,57 @@ def db_conn(tmp_path, monkeypatch):
     conn = database_module.get_connection()
     from services.ledger.service import ensure_ledger_schema
     from services.intake.service import ensure_intake_schema
+    from services.risk_engine.storage import ensure_risk_schema, ensure_receipts_schema
 
     ensure_ledger_schema(conn)
     ensure_intake_schema(conn)
+    ensure_risk_schema(conn)
+    ensure_receipts_schema(conn)
     conn.commit()
     yield conn
+
+
+# Default receiver-identity body for POST /intake/batches/{id}/finalize.
+# facility_id/received_by/role are required by the endpoint since Step 4 --
+# tests that don't care about the specific values can pass this as-is;
+# tests that do (receipts, overrides) build their own dict.
+FINALIZE_BODY = {
+    "facility_id": "PHC-TEST-01",
+    "received_by": "Test Nurse",
+    "role": "store_keeper",
+}
+
+
+def accept_batch(batch_id: str) -> None:
+    """Record an ACCEPT risk decision for a batch, without invoking the model.
+
+    finalize is gated on a persisted ACCEPT decision, so any test that
+    finalizes needs one. Going through POST /risk/evaluate would make these
+    tests depend on the trained artifact and on whatever the model happens to
+    say about a synthetic label image -- this writes the decision directly so
+    the test asserts finalize behaviour, not model behaviour.
+    """
+    from datetime import datetime
+
+    from shared.database import get_connection
+    from shared.schemas import RiskDecision
+    from services.risk_engine.storage import ensure_risk_schema, save_decision
+
+    conn = get_connection()
+    ensure_risk_schema(conn)
+    save_decision(
+        conn,
+        RiskDecision(
+            batch_id=batch_id,
+            risk_score=0.05,
+            decision="ACCEPT",
+            triggered_rule=None,
+            shap_contributors=[],
+            reasons=["test fixture"],
+            decided_at=datetime.utcnow(),
+            model_version="test-fixture",
+        ),
+    )
 
 
 @pytest.fixture()

@@ -33,16 +33,16 @@ def generate_batches(conn) -> None:
     )
 
     demo_hold = Batch(
-    batch_id="DEMO-HOLD",
-    medicine_name="Amoxicillin",
-    batch_number="BN-DEMO-3",
-    supplier_id="S-DEMO",              # was S-RISKY — switch to a cleaner supplier
-    ocr_qr_match_score=0.85,           # was 0.6 — too low, biggest risk driver
-    manufacture_date=date.today() - timedelta(days=100),
-    expiry_date=date.today() + timedelta(days=200),   # was 60 — too close to expiry
-    received_timestamp=datetime.now(),
-    storage_temp_log=[TempLogEntry(timestamp=date.today(), temp_c=9.0)],  # was 12.0 — smaller excursion
-)
+        batch_id="DEMO-HOLD",
+        medicine_name="Amoxicillin",
+        batch_number="BN-DEMO-3",
+        supplier_id="S-DEMO",
+        ocr_qr_match_score=0.75,   # moderate label/QR mismatch -> pushes the score into the HOLD band
+        manufacture_date=date.today() - timedelta(days=100),
+        expiry_date=date.today() + timedelta(days=200),
+        received_timestamp=datetime.now(),
+        storage_temp_log=[TempLogEntry(timestamp=date.today(), temp_c=9.0)],
+    )
 
     for b in (demo_accept, demo_reject, demo_hold):
         if storage.get_batch(conn, b.batch_id) is None:
