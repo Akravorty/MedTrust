@@ -6,6 +6,8 @@ import AuditTrail from './components/AuditTrail';
 import RecallFlow from './components/RecallFlow';
 import DemoToggle from './components/DemoToggle';
 import ActivityTicker from './components/ActivityTicker';
+import LanguagePicker from './components/LanguagePicker';
+import { useI18n } from './i18n';
 import type { BatchDecision } from './types/schema';
 import { scanBatch, simulateRecall, getAlerts } from './services/api';
 import type { AlertRecord } from './services/api';
@@ -68,6 +70,7 @@ function KpiBar() {
 }
 
 function App() {
+  const { t } = useI18n();
   const [appState, setAppState] = useState<AppState>('SCANNING');
   const [batchId, setBatchId] = useState<string | null>(null);
   const [decision, setDecision] = useState<BatchDecision | null>(null);
@@ -127,7 +130,7 @@ function App() {
         refreshQueueDepth();
         setScanMessage({
           kind: 'info',
-          text: `You're offline. The scan for "${scannedBatchId}" is queued and will be sent when you reconnect.`,
+          text: `${t('offlineQueued')} (${scannedBatchId})`,
         });
       } else if (status === 404) {
         setScanMessage({
@@ -268,6 +271,8 @@ function App() {
               + New Scan
             </button>
           )}
+
+          <LanguagePicker />
 
           {/* Dark mode toggle */}
           <button

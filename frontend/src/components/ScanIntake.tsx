@@ -1,10 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Wifi, CheckCircle2 } from 'lucide-react';
+import { Camera, Wifi, CheckCircle2, ImagePlus, Loader2 } from 'lucide-react';
 import { BrowserMultiFormatReader, Result } from '@zxing/library';
+import { scanPack } from '../services/api';
+import { useI18n } from '../i18n';
 
 interface Props {
   onScanComplete: (batchId: string) => void;
 }
+
+/* A medicine that has never been through intake has no batch record to look
+   up by ID -- that's the "not found" real users were hitting. This photo
+   path calls POST /intake/scan to actually REGISTER the pack (OCR + QR),
+   then feeds the new batch_id into the same onScanComplete used elsewhere. */
 
 /* ─── tiny SVG helpers ─── */
 function Spinner() {
@@ -52,6 +59,39 @@ const SCAN_PHASE_MS = 500;
 const VERIFY_PHASE_MS = 400;
 
 export default function ScanIntake({ onScanComplete }: Props) {
+  const { t } = useI18n();
+  const [packUploading, setPackUploading] = useState(false);
+  const [packError, setPackError] = useState<string | null>(null);
+  const packInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePackFile = async (file: File | undefined) => {
+    if (!file) return;
+    setPackError(null);
+    setPackUploading(true);
+    try {
+      const result = await scanPack(file);
+      if (result.status === 'MANUAL_REVIEW') {
+        setPackError(
+          (result.manual_review_reasons?.join(' ') ||
+            'The pack details could not be read clearly.') +
+            ' Try a closer, well-lit photo, or enter the batch ID if it is printed on the pack.',
+        );
+        return;
+      }
+      onScanComplete(result.batch_id);
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      setPackError(
+        status === 422
+          ? 'That image could not be read as a medicine pack. Try a clearer photo.'
+          : err instanceof Error ? err.message : 'Could not read the pack.',
+      );
+    } finally {
+      setPackUploading(false);
+      if (packInputRef.current) packInputRef.current.value = '';
+    }
+  };
+
   /* ── state ── */
   const [scanning, setScanning]             = useState(false);
   const [done, setDone]                     = useState(false);
@@ -195,10 +235,8 @@ export default function ScanIntake({ onScanComplete }: Props) {
 
       {/* ── Title ── */}
       <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-        <h2 className="scan-title">Scan Medicine Batch</h2>
-        <p className="scan-subtitle">
-          Align the barcode or QR code within the frame, or enter the ID manually below.
-        </p>
+        <h2 className="scan-title">{t('scanTitle')}</h2>
+        <p className="scan-subtitle">{t('scanSubtitle')}</p>
       </div>
 
       {/* ── Viewport ── */}
@@ -287,6 +325,37 @@ export default function ScanIntake({ onScanComplete }: Props) {
           <Wifi size={12} />
           {isWebcamActive ? 'Stop Camera' : 'Switch to Webcam'}
         </button>
+      </div>
+
+      {/* ── New medicine? Photograph the pack to register it ── */}
+      <div style={{ maxWidth: '620px', margin: '1rem auto 0', textAlign: 'center' }}>
+        <input
+          ref={packInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={e => handlePackFile(e.target.files?.[0])}
+        />
+        <button
+          type="button"
+          className="webcam-badge"
+          style={{ position: 'static', margin: '0 auto' }}
+          onClick={() => packInputRef.current?.click()}
+          disabled={packUploading}
+        >
+          {packUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+          {packUploading ? t('checking') : t('packPhoto')}
+        </button>
+        <p style={{ fontSize: '0.78rem', opacity: 0.65, margin: '0.4rem 0 0' }}>
+          First time scanning this medicine? A batch ID only works once a pack has been
+          registered — photograph the pack instead and it will be read automatically.
+        </p>
+        {packError && (
+          <p role="alert" style={{ color: '#991b1b', background: '#fee2e2', borderRadius: '8px', padding: '0.5rem 0.75rem', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+            {packError}
+          </p>
+        )}
       </div>
 
       {/* ── Input area ── */}

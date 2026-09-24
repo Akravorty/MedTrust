@@ -56,22 +56,19 @@ def ensure_alerts_schema(conn: sqlite3.Connection) -> None:
 
 def _resolve_message(alert_type: str, language: str, batch_id: str) -> str:
     """
-    Prefer the curated Hindi/Odia wording from data/multilingual_alerts.py.
-    Fall back to an English template when that module isn't importable
-    (it imports the ElevenLabs SDK at module level) or has no string for
-    this combination -- an alert with plain-English text still reaches a
-    human, which a crash does not.
+    Look the wording up in shared/alert_texts.py (pure data, 19 languages).
+    Anything not covered there falls back to English, so an alert with
+    plain-English text still reaches a human, which a crash does not.
     """
-    lang = (language or "EN").upper()
-    if lang in ("HI", "OR"):
-        try:
-            from data.multilingual_alerts import TRANSLATIONS
+    lang = (language or "EN").lower()
+    try:
+        from shared.alert_texts import ALERT_TEXTS
 
-            text = TRANSLATIONS.get(lang, {}).get(alert_type)
-            if text:
-                return f"{text} [{batch_id}]"
-        except Exception:  # noqa: BLE001 - localisation is best-effort
-            pass
+        text = ALERT_TEXTS.get(lang, {}).get(alert_type)
+        if text:
+            return f"{text} [{batch_id}]"
+    except Exception:  # noqa: BLE001 - localisation is best-effort
+        pass
 
     template = _FALLBACK_TEMPLATES["EN"].get(
         alert_type, "ALERT regarding batch {batch_id}."
@@ -143,9 +140,17 @@ def broadcast_recall(
     ]
 
 
-def get_alerts(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
+def get_alerts(conn: sqlite3.Connection, batch_id: str, lang: str | None = None) -> list[dict]:
+    """Newest first. If `lang` is given, each message is re-rendered in that
+    language (from the stored alert_type), so the UI can switch language
+    without re-evaluating the batch."""
     rows = conn.execute(
         "SELECT * FROM alerts WHERE batch_id = ? ORDER BY created_at DESC",
         (batch_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    if lang:
+        for a in out:
+            a["message"] = _resolve_message(a["alert_type"], lang, batch_id)
+            a["language"] = lang.upper()
+    return out

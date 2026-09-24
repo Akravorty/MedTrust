@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from shared.database import get_db
 from services.alerts.service import get_alerts
@@ -18,5 +18,9 @@ def _db_dependency():
 
 
 @router.get("/{batch_id}")
-def list_alerts(batch_id: str, db: sqlite3.Connection = Depends(_db_dependency)):
-    return {"batch_id": batch_id, "alerts": get_alerts(db, batch_id)}
+def list_alerts(
+    batch_id: str,
+    lang: str | None = Query(default=None, max_length=8),
+    db: sqlite3.Connection = Depends(_db_dependency),
+):
+    return {"batch_id": batch_id, "alerts": get_alerts(db, batch_id, lang)}

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { askAgent } from '../services/api';
 import { Send, Bot, FileText } from 'lucide-react';
 import { QAResponse } from '../types/schema';
+import { useI18n } from '../i18n';
 
 interface Message {
   id: string;
@@ -36,6 +37,7 @@ function MarkdownText({ text }: { text: string }) {
 function mkId() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
 export default function ChatPanel({ batchData }: { batchData: import('../types/schema').BatchDecision }) {
+  const { lang } = useI18n();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: mkId(),
@@ -66,7 +68,7 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
     try {
       // Pass full history so askAgent can resolve follow-up context
       const history = [...messages, userMsg].map(m => ({ role: m.role, text: m.text }));
-      const res = await askAgent(batchData, q, history);
+      const res = await askAgent(batchData, q, history, lang);
       setMessages(prev => [
         ...prev,
         { id: mkId(), role: 'agent', text: res.answer, responseMeta: res },
