@@ -17,10 +17,27 @@ without touching qr.py's detection logic or the /intake/scan router.
 from __future__ import annotations
 
 import json
+import re
+from datetime import date
+
 import numpy as np
 import cv2
 
 QR_KNOWN_FIELDS = {"batch_number", "medicine_name", "supplier_id", "expiry_date", "manufacture_date"}
+
+# GS1 Application Identifiers actually used on real pharma packs (CDSCO's
+# API QR mandate + GS1 India track-and-trace both follow this standard).
+# We only map the AIs relevant to QR_KNOWN_FIELDS — a real pack's code may
+# carry more (GTIN 01, serial 21) but those aren't fields this app models
+# yet, so they're read and dropped rather than guessed at.
+#   10 = Batch/Lot number       (variable length, up to FNC1 or AI-17 boundary)
+#   17 = Expiry date, YYMMDD    (fixed length 6)
+#   11 = Manufacture date, YYMMDD (fixed length 6)
+_GS1_AI_EXPIRY = "17"
+_GS1_AI_MFG_DATE = "11"
+_GS1_AI_BATCH = "10"
+_GS1_FIXED_LENGTH_AIS = {_GS1_AI_EXPIRY: 6, _GS1_AI_MFG_DATE: 6}
+_FNC1 = "\x1d"  # GS1 field separator for variable-length AIs
 
 _detector = cv2.QRCodeDetector()
 
@@ -123,7 +140,7 @@ def parse_qr_payload(raw: str) -> dict:
     if not raw:
         return {}
 
-    for parser in (_try_parse_json, _try_parse_kv_pairs):
+    for parser in (_try_parse_json, _try_parse_kv_pairs, _try_parse_gs1):
         result = parser(raw)
         if result:
             return result
@@ -156,4 +173,100 @@ def _try_parse_kv_pairs(raw: str) -> dict:
         value = value.strip()
         if key in QR_KNOWN_FIELDS and value:
             result[key] = value
+    return result
+
+
+def _gs1_date_to_iso(yymmdd: str) -> str | None:
+    """GS1 AI-17/AI-11 dates are YYMMDD with a 51-year pivot (per GS1
+    General Specifications): YY 00-50 -> 20YY, YY 51-99 -> 19YY. Pharma
+    batches never legitimately carry a 19xx date, but we follow the spec
+    exactly rather than special-casing it, since that's what a real
+    scanner would do."""
+    if len(yymmdd) != 6 or not yymmdd.isdigit():
+        return None
+    yy, mm, dd = int(yymmdd[0:2]), int(yymmdd[2:4]), int(yymmdd[4:6])
+    year = 2000 + yy if yy <= 50 else 1900 + yy
+    # AI-17 allows DD=00 to mean "last day of month" per spec; we don't
+    # attempt that expansion here — an unparseable day just fails cleanly.
+    try:
+        return date(year, mm, dd if dd != 0 else 1).isoformat()
+    except ValueError:
+        return None
+
+
+def _try_parse_gs1(raw: str) -> dict:
+    """
+    Parses GS1 Application Identifier strings — the standard real pharma
+    QR/DataMatrix codes use under India's CDSCO track-and-trace mandate
+    and GS1 India's specification. Format looks like:
+
+        (01)08904567891234(17)261231(10)BN123456(21)0001234
+        01089045678912341726123110BN123456210001234        (no parentheses,
+                                                              FNC1-separated)
+
+    Only AIs this app currently models are extracted (10=batch, 17=expiry,
+    11=manufacture date); GTIN (01) and serial (21) are recognized enough
+    to be skipped correctly but not mapped to a QR_KNOWN_FIELDS key yet.
+    Returns {} on anything that doesn't look like GS1 at all, so this
+    parser never falsely claims a non-GS1 payload.
+    """
+    result: dict = {}
+
+    # Bracketed form: (AI)value(AI)value...
+    bracketed = re.findall(r"\((\d{2,4})\)([^\(]+)", raw)
+    if bracketed:
+        for ai, value in bracketed:
+            value = value.strip()
+            if ai == _GS1_AI_BATCH and value:
+                result["batch_number"] = value
+            elif ai == _GS1_AI_EXPIRY:
+                iso = _gs1_date_to_iso(value[:6])
+                if iso:
+                    result["expiry_date"] = iso
+            elif ai == _GS1_AI_MFG_DATE:
+                iso = _gs1_date_to_iso(value[:6])
+                if iso:
+                    result["manufacture_date"] = iso
+        return result
+
+    # Unbracketed form: needs FNC1 (\x1d) separators to know where a
+    # variable-length AI like batch number (10) ends, since it has no
+    # fixed length of its own. Without FNC1 markers this is genuinely
+    # ambiguous per the GS1 spec, so we only attempt it when the raw data
+    # actually contains the separator byte.
+    if _FNC1 not in raw and not raw.isdigit():
+        return {}
+
+    i = 0
+    n = len(raw)
+    while i < n - 1:
+        ai = raw[i:i + 2]
+        if ai in _GS1_FIXED_LENGTH_AIS:
+            length = _GS1_FIXED_LENGTH_AIS[ai]
+            value = raw[i + 2:i + 2 + length]
+            if ai == _GS1_AI_EXPIRY:
+                iso = _gs1_date_to_iso(value)
+                if iso:
+                    result["expiry_date"] = iso
+            elif ai == _GS1_AI_MFG_DATE:
+                iso = _gs1_date_to_iso(value)
+                if iso:
+                    result["manufacture_date"] = iso
+            i += 2 + length
+        elif ai == _GS1_AI_BATCH:
+            end = raw.find(_FNC1, i + 2)
+            end = end if end != -1 else n
+            result["batch_number"] = raw[i + 2:end]
+            i = end + 1
+        elif ai == "01":  # GTIN, fixed length 14 — skip, not modeled yet
+            i += 2 + 14
+        elif ai == "21":  # Serial, variable length — skip to next FNC1
+            end = raw.find(_FNC1, i + 2)
+            i = (end + 1) if end != -1 else n
+        else:
+            # Unrecognized AI in an unbracketed string means we can't
+            # safely know its length, so stop rather than misparsing the
+            # rest of the payload.
+            break
+
     return result

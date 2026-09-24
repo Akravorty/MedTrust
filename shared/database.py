@@ -68,6 +68,13 @@ def init_db() -> None:
     from services.intake.service import ensure_intake_schema
     from services.risk_engine.storage import ensure_risk_schema, ensure_receipts_schema
     from services.alerts.service import ensure_alerts_schema
+    from services.facilities.service import ensure_facilities_schema
+    from services.patients.service import ensure_patients_schema
+    from services.triage.service import ensure_triage_schema
+    from services.referrals.service import ensure_referrals_schema
+    from services.queue.service import ensure_queue_schema
+    from services.teleconsult.service import ensure_teleconsult_schema
+    from services.followups.service import ensure_followups_schema
 
     conn = get_connection()
     ensure_ledger_schema(conn)
@@ -75,4 +82,11 @@ def init_db() -> None:
     ensure_risk_schema(conn)
     ensure_receipts_schema(conn)
     ensure_alerts_schema(conn)
+    ensure_facilities_schema(conn)
+    ensure_patients_schema(conn)
+    ensure_triage_schema(conn)
+    ensure_referrals_schema(conn)
+    ensure_queue_schema(conn)
+    ensure_teleconsult_schema(conn)
+    ensure_followups_schema(conn)
     conn.commit()

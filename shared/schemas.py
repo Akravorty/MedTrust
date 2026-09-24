@@ -104,3 +104,130 @@ class SupplierAlert(BaseModel):
     severity: str
     suggested_action: str
     draft_escalation_message: str
+
+
+# ---------------------------------------------------------------- care access (new) --
+
+class FacilityLevel(str, Enum):
+    SUB_CENTRE = "SUB_CENTRE"
+    PHC = "PHC"
+    CHC = "CHC"
+    RURAL_HOSPITAL = "RURAL_HOSPITAL"
+    DISTRICT_HOSPITAL = "DISTRICT_HOSPITAL"
+
+
+class UrgencyBand(str, Enum):
+    ROUTINE = "ROUTINE"
+    SOON = "SOON"
+    URGENT = "URGENT"
+    EMERGENCY = "EMERGENCY"
+
+
+class ReferralStatus(str, Enum):
+    CREATED = "CREATED"
+    ACCEPTED = "ACCEPTED"
+    IN_TRANSIT = "IN_TRANSIT"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class QueueStatus(str, Enum):
+    WAITING = "WAITING"
+    CALLED = "CALLED"
+    IN_CONSULT = "IN_CONSULT"
+    DONE = "DONE"
+    NO_SHOW = "NO_SHOW"
+
+
+class RiskCategory(str, Enum):
+    MATERNAL = "MATERNAL"
+    CHILD = "CHILD"
+    CHRONIC = "CHRONIC"
+    NONE = "NONE"
+
+
+class Facility(BaseModel):
+    facility_id: str
+    name: str
+    level: FacilityLevel
+    village_or_area: str
+    district: str
+    staff_count: int = 0
+    beds_total: int = 0
+    beds_occupied: int = 0
+    has_teleconsult: bool = True
+
+
+class Patient(BaseModel):
+    patient_id: str
+    name: str
+    age: int
+    gender: str
+    village: str
+    phone: Optional[str] = None
+    home_facility_id: str
+    risk_category: RiskCategory = RiskCategory.NONE
+    registered_by: str  # ASHA / worker id or name
+    registered_at: datetime
+
+
+class TriageResult(BaseModel):
+    triage_id: str
+    patient_id: str
+    symptoms_text: str
+    urgency: UrgencyBand
+    suggested_facility_level: FacilityLevel
+    reasoning: str
+    evidence_sources: list[str]
+    confidence: str
+    decided_at: datetime
+    model_version: str = "triage-agent-v1"
+
+
+class Referral(BaseModel):
+    referral_id: str
+    patient_id: str
+    from_facility_id: str
+    to_facility_id: str
+    reason: str
+    urgency: UrgencyBand
+    status: ReferralStatus = ReferralStatus.CREATED
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class QueueTicket(BaseModel):
+    ticket_id: str
+    facility_id: str
+    patient_id: str
+    token_number: int
+    status: QueueStatus = QueueStatus.WAITING
+    priority: bool = False  # emergency-escalated tickets jump the line
+    created_at: datetime
+    called_at: Optional[datetime] = None
+    est_wait_minutes: Optional[int] = None
+
+
+class TeleconsultSession(BaseModel):
+    session_id: str
+    patient_id: str
+    referral_id: Optional[str] = None
+    facility_id: str
+    doctor_name: str
+    status: str = "SCHEDULED"  # SCHEDULED | ACTIVE | COMPLETED
+    notes: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
+
+class FollowUp(BaseModel):
+    follow_up_id: str
+    patient_id: str
+    risk_category: RiskCategory
+    reason: str
+    due_date: date
+    completed: bool = False
+    completed_at: Optional[datetime] = None
+    created_by: str
+    created_at: datetime
