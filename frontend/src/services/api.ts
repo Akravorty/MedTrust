@@ -1,4 +1,9 @@
-import { BatchDecision, QAResponse, TraceEvent } from '../types/schema';
+import {
+  BatchDecision, QAResponse, TraceEvent,
+  Facility, Patient, TriageResult, Referral, QueueTicket, TeleconsultSession,
+  FollowUp, PatientTimeline, PatientVerification, FacilityDashboardData,
+  ReferralStatus, QueueStatus, RiskCategory,
+} from '../types/schema';
 
 const API_BASE = import.meta.env.VITE_API_BASE as string;
 
@@ -204,9 +209,233 @@ export interface AlertRecord {
   created_at: string;
 }
 
-export const getAlerts = async (batchId: string): Promise<AlertRecord[]> => {
-  const res = await fetch(`${API_BASE}/alerts/${encodeURIComponent(batchId)}`);
+export const getAlerts = async (batchId: string, lang?: string): Promise<AlertRecord[]> => {
+  const url = lang
+    ? `${API_BASE}/alerts/${encodeURIComponent(batchId)}?lang=${encodeURIComponent(lang)}`
+    : `${API_BASE}/alerts/${encodeURIComponent(batchId)}`;
+  const res = await fetch(url);
   if (!res.ok) return [];
   const data = await res.json();
   return data.alerts ?? [];
 };
+
+// GET /alerts/audio/{lang}/{status}/exists -> { exists: boolean }
+// Cheap check before rendering a play button, so we never show a control
+// for a clip that was never recorded (currently only en/hi/or/mr have any).
+export const checkAlertAudioExists = async (lang: string, status: string): Promise<boolean> => {
+  try {
+    const res = await fetch(`${API_BASE}/alerts/audio/${encodeURIComponent(lang)}/${encodeURIComponent(status)}/exists`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    return !!data.exists;
+  } catch {
+    return false;
+  }
+};
+
+// Direct playable URL for GET /alerts/audio/{lang}/{status} — pass straight
+// to an <audio> element's src.
+export const getAlertAudioUrl = (lang: string, status: string): string =>
+  `${API_BASE}/alerts/audio/${encodeURIComponent(lang)}/${encodeURIComponent(status)}`;
+// ═══════════════════════════════════════════════════════════════════════
+// Care-Access module (SIH26133 pivot) — patients, triage, referrals,
+// queue, teleconsult, follow-ups, facility dashboard.
+//
+// Shared helper so every new endpoint handles non-2xx the same way the
+// existing scanBatch/scanPack do: throw an Error carrying `.status`, with
+// the backend's `{ detail }` message when present.
+// ═══════════════════════════════════════════════════════════════════════
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.detail || `Request failed (${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  // 204s and similar have no body to parse.
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
+// ── Facilities ───────────────────────────────────────────────────────────
+export const listFacilities = (district?: string): Promise<Facility[]> =>
+  request(`/facilities${district ? `?district=${encodeURIComponent(district)}` : ''}`);
+
+export const getFacility = (facilityId: string): Promise<Facility> =>
+  request(`/facilities/${encodeURIComponent(facilityId)}`);
+
+// ── Patients ─────────────────────────────────────────────────────────────
+export interface RegisterPatientInput {
+  name: string;
+  age: number;
+  gender: string;
+  village: string;
+  home_facility_id: string;
+  registered_by: string;
+  phone?: string;
+}
+
+export const registerPatient = (input: RegisterPatientInput): Promise<Patient> =>
+  request('/patients', { method: 'POST', body: JSON.stringify(input) });
+
+export const listPatients = (facilityId?: string): Promise<Patient[]> =>
+  request(`/patients${facilityId ? `?facility_id=${encodeURIComponent(facilityId)}` : ''}`);
+
+export const getPatient = (patientId: string): Promise<Patient> =>
+  request(`/patients/${encodeURIComponent(patientId)}`);
+
+export const getPatientTimeline = (patientId: string): Promise<PatientTimeline> =>
+  request(`/patients/${encodeURIComponent(patientId)}/timeline`);
+
+export const verifyPatientRecord = (patientId: string): Promise<PatientVerification> =>
+  request(`/patients/${encodeURIComponent(patientId)}/verify`);
+
+export const updateRiskCategory = (
+  patientId: string,
+  risk_category: RiskCategory,
+  actor: string,
+  reason: string,
+): Promise<Patient> =>
+  request(`/patients/${encodeURIComponent(patientId)}/risk-category`, {
+    method: 'PATCH',
+    body: JSON.stringify({ risk_category, actor, reason }),
+  });
+
+// ── Triage ───────────────────────────────────────────────────────────────
+// NOTE: this is a live multi-tool-call Gemini agent — it can take several
+// seconds. Callers should show a "thinking" state, not a spinner that reads
+// as frozen.
+export const runTriage = (
+  patient_id: string,
+  symptoms_text: string,
+  actor: string,
+): Promise<TriageResult> =>
+  request('/triage', { method: 'POST', body: JSON.stringify({ patient_id, symptoms_text, actor }) });
+
+export const getLatestTriage = (patientId: string): Promise<TriageResult> =>
+  request(`/triage/${encodeURIComponent(patientId)}/latest`);
+
+// ── Referrals ────────────────────────────────────────────────────────────
+export interface CreateReferralInput {
+  patient_id: string;
+  from_facility_id: string;
+  to_facility_id: string;
+  reason: string;
+  urgency: string;
+  created_by: string;
+}
+
+export const createReferral = (input: CreateReferralInput): Promise<Referral> =>
+  request('/referrals', { method: 'POST', body: JSON.stringify(input) });
+
+export const listReferrals = (params: {
+  patient_id?: string; to_facility_id?: string; status?: string;
+} = {}): Promise<Referral[]> => {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v) as [string, string][],
+  ).toString();
+  return request(`/referrals${qs ? `?${qs}` : ''}`);
+};
+
+export const getReferral = (referralId: string): Promise<Referral> =>
+  request(`/referrals/${encodeURIComponent(referralId)}`);
+
+// Throws with `.status === 409` on an invalid transition — the backend is
+// the source of truth here; the UI only pre-filters which buttons it shows.
+export const updateReferralStatus = (
+  referralId: string,
+  status: ReferralStatus,
+  actor: string,
+): Promise<Referral> =>
+  request(`/referrals/${encodeURIComponent(referralId)}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, actor }),
+  });
+
+// ── Queue / token booking ────────────────────────────────────────────────
+export const joinQueue = (
+  facility_id: string,
+  patient_id: string,
+  priority: boolean = false,
+): Promise<QueueTicket> =>
+  request('/queue', { method: 'POST', body: JSON.stringify({ facility_id, patient_id, priority }) });
+
+export const getQueue = (facilityId: string): Promise<QueueTicket[]> =>
+  request(`/queue/${encodeURIComponent(facilityId)}`);
+
+export const getQueueTicket = (ticketId: string): Promise<QueueTicket> =>
+  request(`/queue/ticket/${encodeURIComponent(ticketId)}`);
+
+export const updateQueueTicketStatus = (
+  ticketId: string,
+  status: QueueStatus,
+  actor: string,
+): Promise<QueueTicket> =>
+  request(`/queue/ticket/${encodeURIComponent(ticketId)}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, actor }),
+  });
+
+// ── Teleconsult ──────────────────────────────────────────────────────────
+export const scheduleTeleconsult = (
+  patient_id: string,
+  facility_id: string,
+  doctor_name: string,
+  referral_id?: string,
+): Promise<TeleconsultSession> =>
+  request('/teleconsult', {
+    method: 'POST',
+    body: JSON.stringify({ patient_id, facility_id, doctor_name, referral_id }),
+  });
+
+export const startTeleconsult = (sessionId: string): Promise<TeleconsultSession> =>
+  request(`/teleconsult/${encodeURIComponent(sessionId)}/start`, { method: 'POST' });
+
+export const completeTeleconsult = (sessionId: string, notes: string): Promise<TeleconsultSession> =>
+  request(`/teleconsult/${encodeURIComponent(sessionId)}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({ notes }),
+  });
+
+export const listTeleconsultForPatient = (patientId: string): Promise<TeleconsultSession[]> =>
+  request(`/teleconsult/patient/${encodeURIComponent(patientId)}`);
+
+export const getTeleconsult = (sessionId: string): Promise<TeleconsultSession> =>
+  request(`/teleconsult/${encodeURIComponent(sessionId)}`);
+
+// ── Follow-ups ───────────────────────────────────────────────────────────
+export interface CreateFollowUpInput {
+  patient_id: string;
+  risk_category: RiskCategory;
+  reason: string;
+  due_date: string;
+  created_by: string;
+}
+
+export const createFollowUp = (input: CreateFollowUpInput): Promise<FollowUp> =>
+  request('/followups', { method: 'POST', body: JSON.stringify(input) });
+
+export const listFollowUps = (params: {
+  patient_id?: string; overdue_only?: boolean;
+} = {}): Promise<FollowUp[]> => {
+  const qs = new URLSearchParams(
+    Object.entries(params)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => [k, String(v)]),
+  ).toString();
+  return request(`/followups${qs ? `?${qs}` : ''}`);
+};
+
+export const completeFollowUp = (followUpId: string, actor: string): Promise<FollowUp> =>
+  request(`/followups/${encodeURIComponent(followUpId)}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({ actor }),
+  });
+
+// ── Dashboard ────────────────────────────────────────────────────────────
+export const getDashboard = (facilityId: string): Promise<FacilityDashboardData> =>
+  request(`/dashboard/${encodeURIComponent(facilityId)}`);
