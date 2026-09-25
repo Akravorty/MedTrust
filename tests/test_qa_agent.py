@@ -3,22 +3,24 @@ tests/test_qa_agent.py
 
 Unit tests for services/agents/qa_agent.py.
 
-No real network or Gemini API calls are made: `qa_agent._build_client` and
-`qa_agent.execute_tool` are monkeypatched with fakes. `client.models` is
-stubbed with a `_FakeModels` object whose `.generate_content(**kwargs)`
-returns queued canned responses (or raises a queued exception), matching
-the surface qa_agent.py actually calls: `response.candidates[0].content`
-and `response.function_calls` (each with `.name` / `.args`) — the
-google-genai response shape, not the Anthropic Messages content-block shape.
+No real network or Groq API calls are made: `qa_agent._build_client` and
+`qa_agent.execute_tool` are monkeypatched with fakes. `client.chat.completions`
+is stubbed with a `_FakeCompletions` object whose `.create(**kwargs)` returns
+queued canned responses (or raises a queued exception), matching the surface
+qa_agent.py actually calls: `response.choices[0].message` with `.content` and
+`.tool_calls` (each with `.id` / `.function.name` / `.function.arguments`,
+the arguments being a JSON string) — the OpenAI-compatible shape Groq returns.
 """
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
+import httpx
 import pytest
-from google.genai.errors import APIError
+from groq import APIStatusError
 
 from services.agents import qa_agent
 from shared.schemas import AgentResponse
@@ -28,46 +30,49 @@ from shared.schemas import AgentResponse
 # Test helpers
 # --------------------------------------------------------------------------- #
 
-def _function_call(name: str, args: Dict[str, Any]) -> SimpleNamespace:
-    """Mimics a google.genai function-call object: needs .name and .args."""
-    return SimpleNamespace(name=name, args=args)
+_call_counter = 0
+
+
+def _function_call(name: str, args: Any) -> SimpleNamespace:
+    """Mimics a Groq tool call: .id and .function.{name, arguments (JSON string)}."""
+    global _call_counter
+    _call_counter += 1
+    arguments = args if isinstance(args, str) else json.dumps(args)
+    return SimpleNamespace(id=f"call_{_call_counter}", function=SimpleNamespace(name=name, arguments=arguments))
 
 
 def _response(
     function_calls: Optional[List[SimpleNamespace]] = None,
-    content: Optional[SimpleNamespace] = None,
+    content: Optional[str] = None,
 ) -> SimpleNamespace:
     """
-    Mimics a google.genai GenerateContentResponse.
+    Mimics a Groq chat completion.
 
-    qa_agent.py only reads `response.candidates[0].content` (appended
-    verbatim back into the conversation) and `response.function_calls`
-    (a list of function-call objects, empty/falsy for a plain-text turn).
+    qa_agent.py only reads `response.choices[0].message` (`.content` and
+    `.tool_calls`, which is empty/None for a plain-text turn).
     """
-    return SimpleNamespace(
-        candidates=[SimpleNamespace(content=content or SimpleNamespace())],
-        function_calls=function_calls or [],
-    )
+    message = SimpleNamespace(content=content, tool_calls=function_calls or None)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-class _FakeModels:
-    """Stands in for `client.models`, returning queued responses or raising a queued exception."""
+class _FakeCompletions:
+    """Stands in for `client.chat.completions`, returning queued responses or raising a queued exception."""
 
     def __init__(self, responses: List[Any]) -> None:
         self._responses = list(responses)
         self.calls: List[Dict[str, Any]] = []
 
-    def generate_content(self, **kwargs: Any) -> Any:
+    def create(self, **kwargs: Any) -> Any:
         recorded = dict(kwargs)
-        contents = recorded.get("contents")
-        if isinstance(contents, list):
-            # qa_agent.py keeps appending to the same `contents` list on later
+        messages = recorded.get("messages")
+        if isinstance(messages, list):
+            # qa_agent.py keeps appending to the same `messages` list on later
             # iterations, so snapshot it now or later assertions would see
             # appends that happened *after* this call was made.
-            recorded["contents"] = list(contents)
+            recorded["messages"] = list(messages)
         self.calls.append(recorded)
         if not self._responses:
-            raise AssertionError("_FakeModels.generate_content called more times than responses were queued.")
+            raise AssertionError("_FakeCompletions.create called more times than responses were queued.")
         next_item = self._responses.pop(0)
         if isinstance(next_item, BaseException):
             raise next_item
@@ -76,13 +81,17 @@ class _FakeModels:
 
 class _FakeClient:
     def __init__(self, responses: List[Any]) -> None:
-        self.models = _FakeModels(responses)
+        self.chat = SimpleNamespace(completions=_FakeCompletions(responses))
+
+    @property
+    def calls(self) -> List[Dict[str, Any]]:
+        return self.chat.completions.calls
 
 
 @pytest.fixture(autouse=True)
 def _api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Most tests replace _build_client entirely; this just keeps the env sane by default."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-used")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key-not-used")
 
 
 def _patch_client(monkeypatch: pytest.MonkeyPatch, responses: List[Any]) -> _FakeClient:
@@ -91,8 +100,11 @@ def _patch_client(monkeypatch: pytest.MonkeyPatch, responses: List[Any]) -> _Fak
     return fake_client
 
 
-def _make_api_error(code: int, message: str) -> APIError:
-    return APIError(code, {"error": {"message": message, "status": "ERROR"}})
+def _make_api_error(code: int, message: str, error_code: Optional[str] = None) -> APIStatusError:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(code, request=request)
+    body = {"error": {"message": message, "code": error_code} if error_code else {"message": message}}
+    return APIStatusError(message, response=response, body=body)
 
 
 # --------------------------------------------------------------------------- #
@@ -155,16 +167,18 @@ def test_tool_call_then_submit_answer(monkeypatch: pytest.MonkeyPatch) -> None:
     # Tool was actually invoked with the model's requested input.
     assert recorded_tool_calls == [("get_batch", {"batch_id": "DEMO-HOLD"})]
 
-    # Two round trips to Gemini: the tool-use turn, then the submit_answer turn.
-    assert len(fake_client.models.calls) == 2
+    # Two round trips to Groq: the tool-use turn, then the submit_answer turn.
+    assert len(fake_client.calls) == 2
 
-    # The second call's contents must carry the function response back to Gemini.
-    second_call_contents = fake_client.models.calls[1]["contents"]
-    tool_result_content = second_call_contents[-1]
-    assert tool_result_content.role == "user"
-    part = tool_result_content.parts[0]
-    assert part.function_response.name == "get_batch"
-    assert part.function_response.response == {"result": fake_tool_result}
+    # The second call must carry the assistant's tool call and the tool result back to Groq.
+    second_call_messages = fake_client.calls[1]["messages"]
+    assistant_turn = second_call_messages[-2]
+    assert assistant_turn["role"] == "assistant"
+    assert assistant_turn["tool_calls"][0]["function"]["name"] == "get_batch"
+    tool_result_message = second_call_messages[-1]
+    assert tool_result_message["role"] == "tool"
+    assert tool_result_message["tool_call_id"] == assistant_turn["tool_calls"][0]["id"]
+    assert json.loads(tool_result_message["content"]) == fake_tool_result
 
 
 def test_multiple_tool_calls_in_one_turn_are_all_executed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,12 +226,12 @@ def test_plain_text_turn_is_nudged_then_recovers(monkeypatch: pytest.MonkeyPatch
     result = qa_agent.run_qa_agent("Is DEMO-ACCEPT okay?")
 
     assert result.confidence == "MEDIUM"
-    assert len(fake_client.models.calls) == 2
+    assert len(fake_client.calls) == 2
     # The nudge message must have been appended to the conversation sent on the retry.
-    retry_contents = fake_client.models.calls[1]["contents"]
-    last_content = retry_contents[-1]
-    assert last_content.role == "user"
-    assert "submit_answer" in last_content.parts[0].text
+    retry_messages = fake_client.calls[1]["messages"]
+    last_message = retry_messages[-1]
+    assert last_message["role"] == "user"
+    assert "submit_answer" in last_message["content"]
 
 
 # --------------------------------------------------------------------------- #
@@ -235,11 +249,11 @@ def test_loop_exhaustion_returns_insufficient_evidence(monkeypatch: pytest.Monke
 
     assert result.confidence == "INSUFFICIENT_EVIDENCE"
     assert result.evidence_sources == []
-    assert len(fake_client.models.calls) == qa_agent.MAX_TOOL_ITERATIONS
+    assert len(fake_client.calls) == qa_agent.MAX_TOOL_ITERATIONS
 
 
 # --------------------------------------------------------------------------- #
-# Gemini SDK error -> AgentUnavailableError mapping
+# Groq SDK error -> AgentUnavailableError mapping
 # --------------------------------------------------------------------------- #
 
 def test_api_error_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,7 +262,7 @@ def test_api_error_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(qa_agent.AgentUnavailableError) as excinfo:
         qa_agent.run_qa_agent("Any question")
-    assert "Gemini API Error" in str(excinfo.value.reason)
+    assert "Groq API Error" in str(excinfo.value.reason)
 
 
 def test_rate_limit_style_api_error_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -260,18 +274,18 @@ def test_rate_limit_style_api_error_maps_to_agent_unavailable(monkeypatch: pytes
 
 
 def test_unexpected_exception_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Anything that isn't a google.genai APIError (e.g. a raw connection failure)
+    # Anything that isn't a Groq APIStatusError (e.g. a raw connection failure)
     # should still be caught and converted, not propagate raw.
     err = ConnectionError("connection refused")
     _patch_client(monkeypatch, [err])
 
     with pytest.raises(qa_agent.AgentUnavailableError) as excinfo:
         qa_agent.run_qa_agent("Any question")
-    assert "Could not connect to Gemini API" in str(excinfo.value.reason)
+    assert "Could not connect to Groq API" in str(excinfo.value.reason)
 
 
 def test_missing_api_key_raises_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     # Deliberately do NOT patch _build_client here — we want the real
     # implementation's own env-var guard to fire.
     with pytest.raises(qa_agent.AgentUnavailableError):
@@ -316,10 +330,80 @@ def test_finalize_coerces_non_list_evidence_sources() -> None:
     assert result.evidence_sources == ["batch:X.field"]
 
 
+# --------------------------------------------------------------------------- #
+# Groq-specific behaviour
+# --------------------------------------------------------------------------- #
+
+def test_tools_are_sent_in_openai_format_with_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    submit_call = _function_call(
+        "submit_answer", {"answer": "ok", "confidence": "HIGH", "evidence_sources": ["batch:X.status"]}
+    )
+    fake_client = _patch_client(monkeypatch, [_response(function_calls=[submit_call])])
+
+    qa_agent.run_qa_agent("anything")
+
+    sent = fake_client.calls[0]
+    assert sent["messages"][0] == {"role": "system", "content": qa_agent.SYSTEM_PROMPT}
+    assert sent["messages"][1] == {"role": "user", "content": "anything"}
+    names = [t["function"]["name"] for t in sent["tools"]]
+    assert names == ["get_batch", "get_decision", "get_trace", "get_supplier_history", "submit_answer"]
+    assert all(t["type"] == "function" for t in sent["tools"])
+    assert sent["temperature"] == 0.0
+
+
+def test_malformed_tool_arguments_do_not_crash_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad_call = _function_call("get_batch", "{not valid json")
+    submit_call = _function_call(
+        "submit_answer", {"answer": "No data.", "confidence": "INSUFFICIENT_EVIDENCE", "evidence_sources": []}
+    )
+    _patch_client(monkeypatch, [_response(function_calls=[bad_call]), _response(function_calls=[submit_call])])
+    seen: List[Any] = []
+    monkeypatch.setattr(qa_agent, "execute_tool", lambda name, tool_input: seen.append((name, tool_input)) or {"error": "x"})
+
+    result = qa_agent.run_qa_agent("q")
+
+    assert seen == [("get_batch", {})]
+    assert result.confidence == "INSUFFICIENT_EVIDENCE"
+
+
+def test_tool_use_failed_is_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    err = _make_api_error(400, "Failed to call a function", error_code="tool_use_failed")
+    submit_call = _function_call(
+        "submit_answer", {"answer": "ok", "confidence": "HIGH", "evidence_sources": ["batch:X.status"]}
+    )
+    fake_client = _patch_client(monkeypatch, [err, _response(function_calls=[submit_call])])
+
+    result = qa_agent.run_qa_agent("q")
+
+    assert result.confidence == "HIGH"
+    assert len(fake_client.calls) == 2
+
+
+def test_repeated_tool_use_failed_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    err = _make_api_error(400, "Failed to call a function", error_code="tool_use_failed")
+    _patch_client(monkeypatch, [err, err])
+
+    with pytest.raises(qa_agent.AgentUnavailableError):
+        qa_agent.run_qa_agent("q")
+
+
+def test_submit_answer_wins_when_mixed_with_other_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    data_call = _function_call("get_batch", {"batch_id": "B1"})
+    submit_call = _function_call(
+        "submit_answer", {"answer": "done", "confidence": "MEDIUM", "evidence_sources": ["batch:B1.status"]}
+    )
+    _patch_client(monkeypatch, [_response(function_calls=[data_call, submit_call])])
+    monkeypatch.setattr(qa_agent, "execute_tool", lambda *a, **k: pytest.fail("data tool must not run"))
+
+    result = qa_agent.run_qa_agent("q")
+
+    assert result.answer == "done"
+
+
 # NOTE: The original test file also had `test_find_tool_use_locates_matching_block`
 # and `test_find_tool_use_returns_none_when_absent`, exercising a `qa_agent._find_tool_use`
-# helper. That function doesn't exist in qa_agent.py — the Gemini implementation finds
-# the submit_answer call inline via a generator expression over `response.function_calls`,
+# helper. That function doesn't exist in qa_agent.py — the implementation finds
+# the submit_answer call inline via a generator expression over the message's tool calls,
 # not a separate content-block-scanning helper. Those two tests were testing something
 # that was never built (or was removed on purpose) and have been dropped rather than
 # faked back into existence. If a `_find_tool_use`-style helper is intentionally wanted

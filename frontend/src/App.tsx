@@ -6,6 +6,10 @@ import AuditTrail from './components/AuditTrail';
 import RecallFlow from './components/RecallFlow';
 import DemoToggle from './components/DemoToggle';
 import ActivityTicker from './components/ActivityTicker';
+import LanguagePicker from './components/LanguagePicker';
+import AlertAudioButton from './components/AlertAudioButton';
+import CareAccessFlow from './components/care-access/CareAccessFlow';
+import { useI18n } from './i18n';
 import type { BatchDecision } from './types/schema';
 import { scanBatch, simulateRecall, getAlerts } from './services/api';
 import type { AlertRecord } from './services/api';
@@ -13,6 +17,7 @@ import { enqueueScan, replayQueue, onReconnect, queueDepth } from './services/of
 import { Activity, CheckCircle2, AlertTriangle, Moon, Sun, AlertOctagon, RotateCcw, ThermometerSnowflake, Boxes, Clock, Tag, WifiOff } from 'lucide-react';
 
 export type AppState = 'SCANNING' | 'DECISION' | 'RECALLED';
+export type AppMode = 'BATCH' | 'CARE_ACCESS';
 
 /* ── KPI mock data ── */
 const KPI_DATA = [
@@ -68,6 +73,8 @@ function KpiBar() {
 }
 
 function App() {
+  const { t, lang } = useI18n();
+  const [mode, setMode] = useState<AppMode>('BATCH');
   const [appState, setAppState] = useState<AppState>('SCANNING');
   const [batchId, setBatchId] = useState<string | null>(null);
   const [decision, setDecision] = useState<BatchDecision | null>(null);
@@ -83,6 +90,22 @@ function App() {
   const refreshQueueDepth = useCallback(() => {
     queueDepth().then(setPendingCount);
   }, []);
+
+  // Re-render already-loaded alerts in the newly selected language rather
+  // than leaving them frozen in whatever language they were first fetched
+  // in — otherwise switching the picker mid-demo looks like the language
+  // change did nothing for anyone looking at an already-open decision.
+  useEffect(() => {
+    if (batchId && appState === 'DECISION') {
+      getAlerts(batchId, lang).then(setAlerts).catch(() => {});
+    }
+  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (batchId && appState === 'RECALLED') {
+      getAlerts(batchId, lang).then(setRecallAlerts).catch(() => {});
+    }
+  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // On mount: show any scans already queued from a previous offline session.
   // On reconnect: replay them (each carrying its own Idempotency-Key so a
@@ -118,7 +141,7 @@ function App() {
       setDecision(result);
       setAppState('DECISION');
       // The backend records the alert before it responds, so it is readable now.
-      getAlerts(scannedBatchId).then(setAlerts).catch(() => setAlerts([]));
+      getAlerts(scannedBatchId, lang).then(setAlerts).catch(() => setAlerts([]));
     } catch (error) {
       console.error('Error evaluating batch:', error);
       const status = (error as { status?: number }).status;
@@ -127,7 +150,7 @@ function App() {
         refreshQueueDepth();
         setScanMessage({
           kind: 'info',
-          text: `You're offline. The scan for "${scannedBatchId}" is queued and will be sent when you reconnect.`,
+          text: `${t('offlineQueued')} (${scannedBatchId})`,
         });
       } else if (status === 404) {
         setScanMessage({
@@ -155,7 +178,7 @@ function App() {
     setRecallAlerts([]);
     try {
       setRecallResult(await simulateRecall(id));
-      getAlerts(id).then(setRecallAlerts).catch(() => setRecallAlerts([]));
+      getAlerts(id, lang).then(setRecallAlerts).catch(() => setRecallAlerts([]));
     } catch (err) {
       setRecallError(err instanceof Error ? err.message : 'Recall simulation failed');
     }
@@ -243,7 +266,7 @@ function App() {
             <span className="nav-badge">Quality Gate</span>
           </div>
 
-          {pendingCount > 0 && (
+          {pendingCount > 0 && mode === 'BATCH' && (
             <div
               className="offline-queue-badge"
               style={{
@@ -263,11 +286,28 @@ function App() {
             </div>
           )}
 
-          {batchId && appState !== 'SCANNING' && (
+          {batchId && appState !== 'SCANNING' && mode === 'BATCH' && (
             <button className="btn-new-scan" onClick={resetFlow}>
               + New Scan
             </button>
           )}
+
+          <div className="ca-mode-toggle">
+            <button
+              className={mode === 'BATCH' ? 'ca-mode-toggle--active' : ''}
+              onClick={() => setMode('BATCH')}
+            >
+              {t('caModeBatch')}
+            </button>
+            <button
+              className={mode === 'CARE_ACCESS' ? 'ca-mode-toggle--active' : ''}
+              onClick={() => setMode('CARE_ACCESS')}
+            >
+              {t('caModeToggle')}
+            </button>
+          </div>
+
+          <LanguagePicker />
 
           {/* Dark mode toggle */}
           <button
@@ -285,16 +325,20 @@ function App() {
       </nav>
 
       {/* ── KPI Sub-header ── */}
-      <div className="kpi-section">
-        <div className="page-inner">
-          <KpiBar />
+      {mode === 'BATCH' && (
+        <div className="kpi-section">
+          <div className="page-inner">
+            <KpiBar />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── Main content ── */}
       <main className="page-inner animate-fade-in" style={{ paddingTop: '2rem', paddingBottom: '4rem' }}>
 
-        {appState === 'SCANNING' && (
+        {mode === 'CARE_ACCESS' && <CareAccessFlow />}
+
+        {mode === 'BATCH' && appState === 'SCANNING' && (
           <>
             {isEvaluating && (
               <div style={{ maxWidth: '620px', margin: '0 auto 1rem', padding: '0.75rem 1rem', borderRadius: '8px', background: '#e0f2fe', color: '#075985', fontWeight: 600 }}>
@@ -317,7 +361,7 @@ function App() {
           </>
         )}
 
-        {appState === 'DECISION' && decision && (
+        {mode === 'BATCH' && appState === 'DECISION' && decision && (
           <div className="flex-row gap-6" style={{ alignItems: 'flex-start' }}>
             <div className="flex-col gap-6" style={{ flex: 2 }}>
               {alerts.length > 0 && (
@@ -326,6 +370,7 @@ function App() {
                   <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem', opacity: 0.75 }}>
                     {alerts[0].channel} · {alerts[0].status} · {alerts[0].language}
                   </span>
+                  <AlertAudioButton lang={alerts[0].language.toLowerCase()} status={alerts[0].alert_type} />
                   <p lang={alerts[0].language.toLowerCase()} style={{ margin: '0.5rem 0 0', fontSize: '1.05rem' }}>
                     {alerts[0].message}
                   </p>
@@ -341,7 +386,7 @@ function App() {
           </div>
         )}
 
-        {appState === 'RECALLED' && (
+        {mode === 'BATCH' && appState === 'RECALLED' && (
           <div className="card recall-banner animate-fade-in">
             <div className="recall-header-row">
               <div className="recall-icon-pulse">
@@ -419,6 +464,7 @@ function App() {
               <p style={{ margin: '1rem 0' }}>
                 <strong>{recallAlerts.length} alerts queued for SMS:</strong>{' '}
                 <span lang={recallAlerts[0].language.toLowerCase()}>{recallAlerts[0].message}</span>
+                <AlertAudioButton lang={recallAlerts[0].language.toLowerCase()} status={recallAlerts[0].alert_type} />
               </p>
             )}
 
@@ -433,12 +479,14 @@ function App() {
         )}
 
         {/* ── Live Activity Marquee Ticker ── */}
-        <div style={{ marginTop: '2.5rem' }}>
-          <ActivityTicker />
-        </div>
+        {mode === 'BATCH' && (
+          <div style={{ marginTop: '2.5rem' }}>
+            <ActivityTicker />
+          </div>
+        )}
       </main>
 
-      <DemoToggle onForceState={handleDemoMode} />
+      {mode === 'BATCH' && <DemoToggle onForceState={handleDemoMode} />}
     </div>
   );
 }

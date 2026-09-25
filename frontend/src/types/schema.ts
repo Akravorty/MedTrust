@@ -39,3 +39,168 @@ export interface SupplierAlert {
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   message: string;
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Care-Access module (SIH26133 pivot) — patients, triage, referrals,
+// queue, teleconsult, follow-ups, facility dashboard.
+// Types mirror the backend's Pydantic schemas field-for-field.
+// ═══════════════════════════════════════════════════════════════════════
+
+export type FacilityLevel = 'SUB_CENTRE' | 'PHC' | 'CHC' | 'RURAL_HOSPITAL' | 'DISTRICT_HOSPITAL';
+export type UrgencyBand = 'ROUTINE' | 'SOON' | 'URGENT' | 'EMERGENCY';
+export type ReferralStatus = 'CREATED' | 'ACCEPTED' | 'IN_TRANSIT' | 'COMPLETED' | 'CANCELLED';
+export type QueueStatus = 'WAITING' | 'CALLED' | 'IN_CONSULT' | 'DONE' | 'NO_SHOW';
+export type RiskCategory = 'MATERNAL' | 'CHILD' | 'CHRONIC' | 'NONE';
+export type TriageConfidence = 'HIGH' | 'MEDIUM' | 'INSUFFICIENT_EVIDENCE';
+export type TeleconsultStatus = 'SCHEDULED' | 'ACTIVE' | 'COMPLETED';
+export type DiagnosticStatus = 'ORDERED' | 'SAMPLE_COLLECTED' | 'RESULT_AVAILABLE' | 'REVIEWED' | 'CANCELLED';
+export type DiagnosticResultFlag = 'NORMAL' | 'ABNORMAL' | 'CRITICAL';
+
+export interface Facility {
+  facility_id: string;
+  name: string;
+  level: FacilityLevel;
+  village_or_area: string;
+  district: string;
+  staff_count: number;
+  beds_total: number;
+  beds_occupied: number;
+  has_teleconsult: boolean;
+  has_diagnostics: boolean;
+}
+
+export interface DiagnosticOrder {
+  diagnostic_id: string;
+  patient_id: string;
+  ordering_facility_id: string;
+  performing_facility_id: string;
+  routed: boolean;
+  test_type: string;
+  reason: string;
+  status: DiagnosticStatus;
+  result_flag: DiagnosticResultFlag | null;
+  result_summary: string | null;
+  ordered_by: string;
+  reviewed_by: string | null;
+  created_at: string;
+  updated_at: string;
+  sample_collected_at: string | null;
+  result_available_at: string | null;
+  reviewed_at: string | null;
+}
+
+export interface Patient {
+  patient_id: string;
+  name: string;
+  age: number;
+  gender: string;
+  village: string;
+  phone: string | null;
+  home_facility_id: string;
+  risk_category: RiskCategory;
+  registered_by: string;
+  registered_at: string; // ISO datetime
+}
+
+export interface TriageResult {
+  triage_id: string;
+  patient_id: string;
+  symptoms_text: string;
+  urgency: UrgencyBand;
+  suggested_facility_level: FacilityLevel;
+  reasoning: string;
+  evidence_sources: string[];
+  confidence: TriageConfidence;
+  decided_at: string;
+  model_version: string;
+}
+
+export interface Referral {
+  referral_id: string;
+  patient_id: string;
+  from_facility_id: string;
+  to_facility_id: string;
+  reason: string;
+  urgency: UrgencyBand;
+  status: ReferralStatus;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QueueTicket {
+  ticket_id: string;
+  facility_id: string;
+  patient_id: string;
+  token_number: number;
+  status: QueueStatus;
+  priority: boolean;
+  created_at: string;
+  called_at: string | null;
+  est_wait_minutes: number | null;
+}
+
+export interface TeleconsultSession {
+  session_id: string;
+  patient_id: string;
+  referral_id: string | null;
+  facility_id: string;
+  doctor_name: string;
+  status: TeleconsultStatus;
+  notes: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+export interface FollowUp {
+  follow_up_id: string;
+  patient_id: string;
+  risk_category: RiskCategory;
+  reason: string;
+  due_date: string; // YYYY-MM-DD
+  completed: boolean;
+  completed_at: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface PatientTimelineEvent {
+  event_id: string;
+  actor: string;
+  action: string;
+  timestamp: string;
+}
+
+export interface PatientTimeline {
+  patient_id: string;
+  events: PatientTimelineEvent[];
+}
+
+export interface PatientVerification {
+  patient_id: string;
+  valid: boolean;
+  total_events: number;
+  explanation: string;
+}
+
+export interface FacilityDashboardData {
+  facility_id: string;
+  date: string;
+  patients_registered_today: number;
+  patients_triaged_today: number;
+  emergency_flags_today: number;
+  referrals_completed_total: number;
+  referrals_pending_incoming: number;
+  queue_depth_now: number;
+  high_risk_follow_ups_overdue: number;
+  diagnostics: {
+    pending: number;
+    awaiting_review: number;
+    critical_awaiting_review: number;
+  };
+  medicine_availability: {
+    total_batches_tracked: number;
+    pass_rate_pct: number | null;
+    flagged: number;
+  };
+}

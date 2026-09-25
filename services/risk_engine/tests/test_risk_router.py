@@ -35,11 +35,19 @@ def make_batch(**overrides) -> Batch:
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     app = FastAPI()
     app.include_router(router_module.router)
 
-    # Never hit a real DB or ledger in this test file.
+    # evaluate/get_decision persist to the risk_decisions and alerts tables, so give
+    # every test its own throwaway database with the schema in place. Never the dev DB.
+    import shared.database as database_module
+
+    monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "risk_router_test.db")
+    monkeypatch.setattr(database_module, "_connection", None)
+    database_module.init_db()
+
+    # Never hit a real ledger in this test file.
     monkeypatch.setattr(data_access, "persist_batch_status", lambda *a, **k: None)
     monkeypatch.setattr(
         ledger_client, "log_risk_decision", lambda *a, **k: {"event_id": "evt-1"}
