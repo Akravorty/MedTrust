@@ -21,11 +21,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+from groq import APIStatusError, Groq
 from pydantic import ValidationError
 
+from services import llm
 from services.triage.tools import execute_triage_tool
 from shared.schemas import FacilityLevel, TriageResult, UrgencyBand
 
@@ -33,8 +32,8 @@ load_dotenv()
 
 logger = logging.getLogger("meditrust.triage.agent")
 
-DEFAULT_MODEL = "gemini-3.6-flash"
-TRIAGE_AGENT_MODEL = os.environ.get("TRIAGE_AGENT_MODEL", DEFAULT_MODEL)
+# Model comes from TRIAGE_AGENT_MODEL, else GROQ_MODEL, else the shared default (see services/llm.py).
+TRIAGE_AGENT_MODEL = llm.resolve_model("TRIAGE_AGENT_MODEL")
 
 MAX_TOOL_ITERATIONS = 8
 _VALID_CONFIDENCE = {"HIGH", "MEDIUM", "INSUFFICIENT_EVIDENCE"}
@@ -79,103 +78,73 @@ context once you already have enough to decide. submit_triage is itself your fin
 optional extra step after some other action.
 """
 
-get_patient_profile_decl = types.FunctionDeclaration(
-    name="get_patient_profile",
-    description="Fetch the patient's age, gender, village, risk category, and home facility.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {"patient_id": {"type": "STRING", "description": "The patient identifier."}},
-        "required": ["patient_id"],
-    },
-)
+_PATIENT_ID_PROP = {"patient_id": {"type": "string", "description": "The patient identifier."}}
+_FACILITY_LEVELS = ["SUB_CENTRE", "PHC", "CHC", "RURAL_HOSPITAL", "DISTRICT_HOSPITAL"]
 
-get_patient_history_decl = types.FunctionDeclaration(
-    name="get_patient_history",
-    description="Fetch the patient's recent visit/triage/referral history.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {"patient_id": {"type": "STRING", "description": "The patient identifier."}},
-        "required": ["patient_id"],
-    },
-)
-
-get_facility_capacity_decl = types.FunctionDeclaration(
-    name="get_facility_capacity",
-    description="Fetch a facility's level, bed availability, and teleconsult availability.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {"facility_id": {"type": "STRING", "description": "The facility identifier."}},
-        "required": ["facility_id"],
-    },
-)
-
-find_referral_target_decl = types.FunctionDeclaration(
-    name="find_referral_target",
-    description="Find the nearest facility at a given level (e.g. PHC, CHC) in the same district as a home facility.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {
-            "from_facility_id": {"type": "STRING", "description": "The patient's home/current facility id."},
+_TOOLS = [
+    llm.function_tool(
+        "get_patient_profile",
+        "Fetch the patient's age, gender, village, risk category, and home facility.",
+        _PATIENT_ID_PROP,
+        ["patient_id"],
+    ),
+    llm.function_tool(
+        "get_patient_history",
+        "Fetch the patient's recent visit/triage/referral history.",
+        _PATIENT_ID_PROP,
+        ["patient_id"],
+    ),
+    llm.function_tool(
+        "get_facility_capacity",
+        "Fetch a facility's level, bed availability, and teleconsult availability.",
+        {"facility_id": {"type": "string", "description": "The facility identifier."}},
+        ["facility_id"],
+    ),
+    llm.function_tool(
+        "find_referral_target",
+        "Find the nearest facility at a given level (e.g. PHC, CHC) to a home facility.",
+        {
+            "from_facility_id": {"type": "string", "description": "The patient's home/current facility id."},
             "target_level": {
-                "type": "STRING",
-                "enum": ["SUB_CENTRE", "PHC", "CHC", "RURAL_HOSPITAL", "DISTRICT_HOSPITAL"],
+                "type": "string",
+                "enum": _FACILITY_LEVELS,
                 "description": "The facility level to search for.",
             },
         },
-        "required": ["from_facility_id", "target_level"],
-    },
-)
-
-submit_triage_decl = types.FunctionDeclaration(
-    name="submit_triage",
-    description="Call this exactly once, as your final action, to submit the triage result.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {
+        ["from_facility_id", "target_level"],
+    ),
+    llm.function_tool(
+        "submit_triage",
+        "Call this exactly once, as your final action, to submit the triage result.",
+        {
             "urgency": {
-                "type": "STRING",
+                "type": "string",
                 "enum": ["ROUTINE", "SOON", "URGENT", "EMERGENCY"],
                 "description": "Urgency band for this patient's symptoms.",
             },
             "suggested_facility_level": {
-                "type": "STRING",
-                "enum": ["SUB_CENTRE", "PHC", "CHC", "RURAL_HOSPITAL", "DISTRICT_HOSPITAL"],
+                "type": "string",
+                "enum": _FACILITY_LEVELS,
                 "description": "The facility level the patient should be seen at.",
             },
             "reasoning": {
-                "type": "STRING",
+                "type": "string",
                 "description": "Plain-language explanation grounded in the tool results retrieved.",
             },
-            "confidence": {
-                "type": "STRING",
-                "enum": ["HIGH", "MEDIUM", "INSUFFICIENT_EVIDENCE"],
-            },
+            "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "INSUFFICIENT_EVIDENCE"]},
             "evidence_sources": {
-                "type": "ARRAY",
-                "items": {"type": "STRING"},
+                "type": "array",
+                "items": {"type": "string"},
                 "description": "Which tool results the reasoning relied on.",
             },
         },
-        "required": ["urgency", "suggested_facility_level", "reasoning", "confidence", "evidence_sources"],
-    },
-)
-
-_GEMINI_TOOLS = types.Tool(
-    function_declarations=[
-        get_patient_profile_decl,
-        get_patient_history_decl,
-        get_facility_capacity_decl,
-        find_referral_target_decl,
-        submit_triage_decl,
-    ]
-)
+        ["urgency", "suggested_facility_level", "reasoning", "confidence", "evidence_sources"],
+    ),
+]
 
 
-def _build_client() -> genai.Client:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise TriageAgentUnavailableError("GEMINI_API_KEY is not configured in .env file.")
-    return genai.Client(api_key=api_key)
+def _build_client() -> Groq:
+    return llm.build_client(TriageAgentUnavailableError)
 
 
 def run_triage_agent(patient_id: str, symptoms_text: str, model: Optional[str] = None) -> TriageResult:
@@ -183,53 +152,43 @@ def run_triage_agent(patient_id: str, symptoms_text: str, model: Optional[str] =
     active_model = model or TRIAGE_AGENT_MODEL
 
     user_message = f"patient_id: {patient_id}\nReported symptoms: {symptoms_text}"
-    contents: List[Any] = [
-        types.Content(role="user", parts=[types.Part.from_text(text=user_message)])
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_message},
     ]
-
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
-        temperature=0.0,
-        tools=[_GEMINI_TOOLS],
-    )
 
     for _ in range(1, MAX_TOOL_ITERATIONS + 1):
         try:
-            response = client.models.generate_content(
-                model=active_model, contents=contents, config=config,
+            response = llm.chat(
+                client,
+                model=active_model,
+                messages=messages,
+                tools=_TOOLS,
+                tool_choice="auto",
+                temperature=0.0,
             )
-        except APIError as exc:
-            logger.error("Gemini API Error: %s", exc)
-            raise TriageAgentUnavailableError(f"Gemini API Error: {exc}", exc) from exc
+        except APIStatusError as exc:
+            logger.error("Groq API Error: %s", exc)
+            raise TriageAgentUnavailableError(f"Groq API Error: {exc}", exc) from exc
         except Exception as exc:
-            logger.error("Could not connect to Gemini API: %s", exc)
-            raise TriageAgentUnavailableError(f"Could not connect to Gemini API: {exc}", exc) from exc
+            logger.error("Could not connect to Groq API: %s", exc)
+            raise TriageAgentUnavailableError(f"Could not connect to Groq API: {exc}", exc) from exc
 
-        if response.candidates and response.candidates[0].content:
-            contents.append(response.candidates[0].content)
+        message = llm.message_of(response)
+        messages.append(llm.assistant_turn(message))
+        tool_calls = llm.tool_calls_of(message)
 
-        if response.function_calls:
-            submit_call = next((c for c in response.function_calls if c.name == "submit_triage"), None)
+        if tool_calls:
+            submit_call = next((c for c in tool_calls if c.function.name == "submit_triage"), None)
             if submit_call is not None:
-                args = dict(submit_call.args) if submit_call.args else {}
-                return _finalize(patient_id, symptoms_text, args)
+                return _finalize(patient_id, symptoms_text, llm.call_args(submit_call))
 
-            function_responses = []
-            for call in response.function_calls:
-                call_args = dict(call.args) if call.args else {}
-                result = execute_triage_tool(call.name, call_args)
-                function_responses.append(
-                    types.Part.from_function_response(name=call.name, response={"result": result})
-                )
-            contents.append(types.Content(role="user", parts=function_responses))
+            for call in tool_calls:
+                result = execute_triage_tool(call.function.name, llm.call_args(call))
+                messages.append(llm.tool_result_turn(call, result))
         else:
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(
-                        text="You must either call a data tool or call submit_triage to finalize."
-                    )],
-                )
+            messages.append(
+                {"role": "user", "content": "You must either call a data tool or call submit_triage to finalize."}
             )
 
     # Fell out of the loop without a submission — fail safe toward caution,

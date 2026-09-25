@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from shared.database import get_db
-from services.facilities.service import list_facilities, get_facility
+from services.facilities.service import find_nearest_facility, get_facility, list_facilities
 
 router = APIRouter(prefix="/facilities", tags=["facilities"])
 
@@ -28,6 +28,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "beds_total": row["beds_total"],
         "beds_occupied": row["beds_occupied"],
         "has_teleconsult": bool(row["has_teleconsult"]),
+        "has_diagnostics": bool(row["has_diagnostics"]),
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
     }
 
 
@@ -43,3 +46,26 @@ def get_one_facility(facility_id: str, db: sqlite3.Connection = Depends(_db_depe
     if row is None:
         return {"error": "Facility not found"}
     return _row_to_dict(row)
+
+
+@router.get("/{facility_id}/nearest")
+def get_nearest(
+    facility_id: str, level: str | None = None, require_diagnostics: bool = False,
+    db: sqlite3.Connection = Depends(_db_dependency),
+):
+    """Nearest facility to this one. `level` (e.g. PHC, CHC) narrows to that
+    facility level; omit it to search every level. `require_diagnostics=true`
+    restricts to facilities that can run diagnostics. `distance_km` is
+    straight-line, and `distance_basis` says whether it was measured
+    ("geo-distance") or a same-district match because coordinates are missing."""
+    if get_facility(db, facility_id) is None:
+        raise HTTPException(status_code=404, detail="Facility not found")
+    nearest = find_nearest_facility(db, facility_id, level, require_diagnostics=require_diagnostics)
+    if nearest is None:
+        target = level or "any-level"
+        raise HTTPException(status_code=404, detail=f"No {target} facility found near {facility_id}")
+    return {
+        **_row_to_dict(nearest.facility),
+        "distance_km": nearest.distance_km,
+        "distance_basis": nearest.basis,
+    }

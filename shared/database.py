@@ -75,6 +75,7 @@ def init_db() -> None:
     from services.queue.service import ensure_queue_schema
     from services.teleconsult.service import ensure_teleconsult_schema
     from services.followups.service import ensure_followups_schema
+    from services.diagnostics.service import ensure_diagnostics_schema
 
     conn = get_connection()
     ensure_ledger_schema(conn)
@@ -89,4 +90,5 @@ def init_db() -> None:
     ensure_queue_schema(conn)
     ensure_teleconsult_schema(conn)
     ensure_followups_schema(conn)
+    ensure_diagnostics_schema(conn)
     conn.commit()

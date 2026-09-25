@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Video, PhoneCall, PhoneOff, Clock, FileText, ArrowRight } from 'lucide-react';
+import { Video, PhoneCall, PhoneOff, Clock, FileText, ArrowRight, ExternalLink, Copy } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import { scheduleTeleconsult, startTeleconsult, completeTeleconsult } from '../../services/api';
+import { videoRoomUrl } from '../../services/video';
 import type { Patient, TriageResult, Referral, TeleconsultSession } from '../../types/schema';
 
 interface Props {
@@ -26,6 +27,7 @@ export default function TeleconsultScreen({ patient, triage, referral, defaultAc
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -60,6 +62,17 @@ export default function TeleconsultScreen({ patient, triage, referral, defaultAc
       setError(err instanceof Error ? err.message : 'Could not start call');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (!session) return;
+    try {
+      await navigator.clipboard.writeText(videoRoomUrl(session.session_id));
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setError('Could not copy the link. Long-press or right-click "Open video room" to copy it.');
     }
   };
 
@@ -133,6 +146,23 @@ export default function TeleconsultScreen({ patient, triage, referral, defaultAc
               </button>
             )}
           </div>
+
+          {session && (session.status === 'SCHEDULED' || session.status === 'ACTIVE') && (
+            <div className="ca-actions-row" style={{ marginTop: '0.75rem' }}>
+              <a
+                className="ca-btn ca-btn--sm ca-btn--secondary"
+                href={videoRoomUrl(session.session_id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ textDecoration: 'none' }}
+              >
+                <ExternalLink size={14} /> {t('caJoinVideo')}
+              </a>
+              <button className="ca-btn ca-btn--sm ca-btn--secondary" onClick={handleCopyLink}>
+                <Copy size={14} /> {linkCopied ? t('caVideoLinkCopied') : t('caCopyVideoLink')}
+              </button>
+            </div>
+          )}
 
           {(session?.status === 'ACTIVE' || session?.status === 'COMPLETED') && (
             <div className="ca-form-grid ca-form-grid--single" style={{ marginTop: '1rem' }}>

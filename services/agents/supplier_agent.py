@@ -6,7 +6,7 @@ Person 4 (Agentic Layer) — Supplier Intelligence Agent for MediTrust.
 Two SIH production-enhancement beats live here:
 
 1. Supplier Trend Threshold Rule Engine:
-   Before ever invoking Gemini, this module evaluates the standard
+   Before ever invoking the LLM, this module evaluates the standard
    degradation metric programmatically:
 
        reject_rate_3mo - reject_rate_6mo > 0.05
@@ -20,11 +20,11 @@ Two SIH production-enhancement beats live here:
 2. Multilingual Alert Engine:
    When a caller passes `lang="hi"` or `lang="or"`, the agent's English
    `draft_escalation_message` is translated into Hindi or Odia via a second,
-   narrowly-scoped Gemini call. The shared `SupplierAlert` schema is
+   narrowly-scoped Groq call. The shared `SupplierAlert` schema is
    untouched — `draft_escalation_message` remains a single string field;
    localization simply changes which language is in it.
 
-Error handling mirrors qa_agent.py: Google GenAI failures are caught and
+Error handling mirrors qa_agent.py: Groq failures are caught and
 re-raised as `AgentUnavailableError` (imported from qa_agent to keep one
 exception type across the whole agent layer), for router.py to map to
 HTTP 503.
@@ -38,10 +38,9 @@ import os
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+from groq import APIStatusError, Groq
 
+from services import llm
 from shared.schemas import SupplierAlert
 from services.agents.tools import execute_tool
 from services.agents.qa_agent import AgentUnavailableError
@@ -52,8 +51,8 @@ logger = logging.getLogger("meditrust.agents.supplier_agent")
 # Configuration
 # --------------------------------------------------------------------------- #
 
-DEFAULT_PRIMARY_MODEL = "gemini-2.5-flash"
-SUPPLIER_AGENT_MODEL = os.environ.get("SUPPLIER_AGENT_MODEL", DEFAULT_PRIMARY_MODEL)
+# Model comes from SUPPLIER_AGENT_MODEL, else GROQ_MODEL, else the shared default (see services/llm.py).
+SUPPLIER_AGENT_MODEL = llm.resolve_model("SUPPLIER_AGENT_MODEL")
 
 DEGRADATION_THRESHOLD = 0.05
 
@@ -110,44 +109,44 @@ class UnsupportedLanguageError(ValueError):
 # Client Construction & LLM Invocation
 # --------------------------------------------------------------------------- #
 
-def _build_client() -> genai.Client:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise AgentUnavailableError("GEMINI_API_KEY environment variable is missing.")
-    return genai.Client(api_key=api_key)
+def _build_client() -> Groq:
+    return llm.build_client(AgentUnavailableError)
 
 
-def _call_structured_gemini(
-    client: genai.Client,
+def _call_structured_llm(
+    client: Groq,
     system_instruction: str,
     user_content: str,
     response_schema: type[BaseModel],
     model: str,
 ) -> Dict[str, Any]:
     """
-    Executes a Gemini request with structured output JSON enforcement.
+    Executes a Groq request in JSON mode, with the response model's JSON schema
+    given to the model, and returns the parsed object.
     """
     try:
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            response_mime_type="application/json",
-            response_schema=response_schema,
+        text = llm.json_object_completion(
+            client,
+            model=model,
+            system_prompt=system_instruction,
+            user_content=user_content,
+            json_schema=response_schema.model_json_schema(),
             temperature=0.2,
         )
-        response = client.models.generate_content(
-            model=model,
-            contents=user_content,
-            config=config,
-        )
-        if not response.text:
-            raise AgentUnavailableError("Received empty response from Gemini API.")
-        
-        return json.loads(response.text)
-    except APIError as exc:
-        logger.error("Gemini API error during generation: %s", exc)
-        raise AgentUnavailableError(f"Gemini API error: {str(exc)}") from exc
+        if not text:
+            raise AgentUnavailableError("Received empty response from Groq API.")
+
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise AgentUnavailableError("Groq API returned JSON that is not an object.")
+        return parsed
+    except AgentUnavailableError:
+        raise
+    except APIStatusError as exc:
+        logger.error("Groq API error during generation: %s", exc)
+        raise AgentUnavailableError(f"Groq API error: {str(exc)}") from exc
     except Exception as exc:
-        logger.error("Unexpected error during Gemini execution: %s", exc)
+        logger.error("Unexpected error during Groq execution: %s", exc)
         raise AgentUnavailableError(f"Failed to generate structured agent output: {str(exc)}") from exc
 
 
@@ -221,7 +220,7 @@ def run_supplier_agent(
     active_model = model or SUPPLIER_AGENT_MODEL
     client = _build_client()
 
-    analysis_input = _call_structured_gemini(
+    analysis_input = _call_structured_llm(
         client=client,
         system_instruction=ANALYSIS_SYSTEM_PROMPT,
         user_content=(
@@ -260,9 +259,9 @@ def run_supplier_agent(
     )
 
 
-def _translate_message(client: genai.Client, text: str, lang: str, model: str) -> str:
+def _translate_message(client: Groq, text: str, lang: str, model: str) -> str:
     language_name = _SUPPORTED_LANGS[lang]
-    translation_input = _call_structured_gemini(
+    translation_input = _call_structured_llm(
         client=client,
         system_instruction=TRANSLATION_SYSTEM_PROMPT_TEMPLATE.format(language=language_name),
         user_content=text,

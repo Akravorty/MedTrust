@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LayoutDashboard, Users, Stethoscope, AlertTriangle, CheckCircle2, Inbox, Ticket, CalendarClock, Pill, RotateCw } from 'lucide-react';
+import { LayoutDashboard, Users, Stethoscope, AlertTriangle, CheckCircle2, Inbox, Ticket, CalendarClock, Pill, FlaskConical, RotateCw } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import type { Key } from '../../i18n';
 import { useFacilities, facilityLabel } from '../../hooks/useFacilities';
@@ -99,6 +99,25 @@ export default function FacilityDashboard({ defaultFacilityId }: Props) {
             </span>
             <span className="ca-kpi-label">
               {t('caMedicineAvailability')} · {data.medicine_availability.total_batches_tracked} tracked, {data.medicine_availability.flagged} flagged
+            </span>
+          </div>
+
+          <div className="ca-kpi-card">
+            <div style={{
+              background: data.diagnostics.critical_awaiting_review > 0 ? '#fee2e2' : '#ede9fe',
+              color: data.diagnostics.critical_awaiting_review > 0 ? '#b91c1c' : '#7c3aed',
+              width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem',
+            }}>
+              <FlaskConical size={17} strokeWidth={2.2} />
+            </div>
+            <span className="ca-kpi-value" style={{ color: data.diagnostics.critical_awaiting_review > 0 ? '#b91c1c' : '#7c3aed' }}>
+              {data.diagnostics.pending}
+            </span>
+            <span className="ca-kpi-label">
+              {t('caDiagnosticsPending')} · {data.diagnostics.awaiting_review} {t('caDiagnosticsAwaitingReview').toLowerCase()}
+              {data.diagnostics.critical_awaiting_review > 0 && (
+                <> · <strong style={{ color: '#b91c1c' }}>{data.diagnostics.critical_awaiting_review} {t('caDiagnosticsCritical').toLowerCase()}</strong></>
+              )}
             </span>
           </div>
         </div>

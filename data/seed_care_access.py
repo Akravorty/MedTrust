@@ -6,7 +6,7 @@ startup, the same way golden_batches.py seeds intake. Idempotent — safe
 to call on every app startup.
 
 Does NOT seed triage_results or teleconsult_sessions: those require a
-live Gemini call / are meant to be demonstrated live on camera, not
+live LLM call / are meant to be demonstrated live on camera, not
 pre-baked, so the demo video shows the actual agent reasoning happening.
 """
 
@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from shared.database import get_connection, init_db
 from shared.schemas import Facility, FacilityLevel, Patient, QueueStatus, Referral, ReferralStatus, RiskCategory, UrgencyBand
-from services.facilities.service import ensure_facilities_schema, insert_facility, get_facility
+from services.facilities.service import ensure_facilities_schema, insert_facility, get_facility, set_facility_coordinates
 from services.patients.service import ensure_patients_schema, register_patient, get_patient
 from services.referrals.service import ensure_referrals_schema
 from services.queue.service import ensure_queue_schema
@@ -25,14 +25,29 @@ from services.followups.service import ensure_followups_schema, create_follow_up
 DISTRICT = "Nabarangpur"
 
 _FACILITIES = [
-    # (facility_id, name, level, village, staff, beds, occupied, teleconsult)
-    ("SC-BADIM", "Sub-Centre Badimela", FacilityLevel.SUB_CENTRE, "Badimela", 2, 0, 0, False),
-    ("SC-JHARI", "Sub-Centre Jharigaon", FacilityLevel.SUB_CENTRE, "Jharigaon", 2, 0, 0, False),
-    ("PHC-UMER", "PHC Umerkote", FacilityLevel.PHC, "Umerkote", 6, 10, 4, True),
-    ("PHC-RAIGH", "PHC Raighar", FacilityLevel.PHC, "Raighar", 5, 8, 3, True),
-    ("CHC-NABAR", "CHC Nabarangpur", FacilityLevel.CHC, "Nabarangpur Town", 18, 30, 14, True),
-    ("DH-NABAR", "District Hospital Nabarangpur", FacilityLevel.DISTRICT_HOSPITAL, "Nabarangpur Town", 45, 120, 61, True),
+    # (facility_id, name, level, village, staff, beds, occupied, teleconsult, diagnostics)
+    # Two sub-centres and one PHC have no on-site lab/imaging, so a diagnostic
+    # order placed there actually exercises the auto-routing logic in the demo.
+    ("SC-BADIM", "Sub-Centre Badimela", FacilityLevel.SUB_CENTRE, "Badimela", 2, 0, 0, False, False),
+    ("SC-JHARI", "Sub-Centre Jharigaon", FacilityLevel.SUB_CENTRE, "Jharigaon", 2, 0, 0, False, False),
+    ("PHC-UMER", "PHC Umerkote", FacilityLevel.PHC, "Umerkote", 6, 10, 4, True, False),
+    ("PHC-RAIGH", "PHC Raighar", FacilityLevel.PHC, "Raighar", 5, 8, 3, True, True),
+    ("CHC-NABAR", "CHC Nabarangpur", FacilityLevel.CHC, "Nabarangpur Town", 18, 30, 14, True, True),
+    ("DH-NABAR", "District Hospital Nabarangpur", FacilityLevel.DISTRICT_HOSPITAL, "Nabarangpur Town", 45, 120, 61, True, True),
 ]
+
+# APPROXIMATE demo coordinates (lat, lon), town/village level only. They exist so
+# referral "nearest facility" is a real distance calculation in the demo; they are
+# NOT surveyed positions. For a real deployment, load facility coordinates from an
+# authoritative source (e.g. the National Health Facility Registry) instead.
+_COORDS = {
+    "SC-BADIM": (19.170, 82.230),
+    "SC-JHARI": (19.360, 82.440),
+    "PHC-UMER": (19.200, 82.200),
+    "PHC-RAIGH": (19.450, 82.250),
+    "CHC-NABAR": (19.233, 82.550),
+    "DH-NABAR": (19.236, 82.547),
+}
 
 _PATIENTS = [
     # (name, age, gender, village, home_facility_id, risk_category)
@@ -55,14 +70,19 @@ def generate_care_access_demo(conn) -> None:
     ensure_queue_schema(conn)
     ensure_followups_schema(conn)
 
-    for facility_id, name, level, village, staff, beds, occupied, tele in _FACILITIES:
+    for facility_id, name, level, village, staff, beds, occupied, tele, diag in _FACILITIES:
         if get_facility(conn, facility_id) is None:
             insert_facility(conn, Facility(
                 facility_id=facility_id, name=name, level=level, village_or_area=village,
                 district=DISTRICT, staff_count=staff, beds_total=beds, beds_occupied=occupied,
-                has_teleconsult=tele,
+                has_teleconsult=tele, has_diagnostics=diag,
+                latitude=_COORDS[facility_id][0], longitude=_COORDS[facility_id][1],
             ))
             print(f"  Facility {facility_id} ({name})")
+
+    # Facilities seeded before coordinates existed get them filled in (never overwritten).
+    for facility_id, (lat, lon) in _COORDS.items():
+        set_facility_coordinates(conn, facility_id, lat, lon)
 
     existing = conn.execute("SELECT COUNT(*) AS c FROM patients").fetchone()["c"]
     if existing == 0:

@@ -35,7 +35,7 @@ def ensure_triage_schema(conn: sqlite3.Connection) -> None:
 
 
 def run_and_store_triage(conn: sqlite3.Connection, *, patient_id: str, symptoms_text: str, actor: str) -> TriageResult:
-    get_patient_or_raise(conn, patient_id)  # fail fast with a named error, not a Gemini call on a bad id
+    get_patient_or_raise(conn, patient_id)  # fail fast with a named error, not an LLM call on a bad id
 
     result = run_triage_agent(patient_id, symptoms_text)
 

@@ -53,6 +53,8 @@ export type QueueStatus = 'WAITING' | 'CALLED' | 'IN_CONSULT' | 'DONE' | 'NO_SHO
 export type RiskCategory = 'MATERNAL' | 'CHILD' | 'CHRONIC' | 'NONE';
 export type TriageConfidence = 'HIGH' | 'MEDIUM' | 'INSUFFICIENT_EVIDENCE';
 export type TeleconsultStatus = 'SCHEDULED' | 'ACTIVE' | 'COMPLETED';
+export type DiagnosticStatus = 'ORDERED' | 'SAMPLE_COLLECTED' | 'RESULT_AVAILABLE' | 'REVIEWED' | 'CANCELLED';
+export type DiagnosticResultFlag = 'NORMAL' | 'ABNORMAL' | 'CRITICAL';
 
 export interface Facility {
   facility_id: string;
@@ -64,6 +66,27 @@ export interface Facility {
   beds_total: number;
   beds_occupied: number;
   has_teleconsult: boolean;
+  has_diagnostics: boolean;
+}
+
+export interface DiagnosticOrder {
+  diagnostic_id: string;
+  patient_id: string;
+  ordering_facility_id: string;
+  performing_facility_id: string;
+  routed: boolean;
+  test_type: string;
+  reason: string;
+  status: DiagnosticStatus;
+  result_flag: DiagnosticResultFlag | null;
+  result_summary: string | null;
+  ordered_by: string;
+  reviewed_by: string | null;
+  created_at: string;
+  updated_at: string;
+  sample_collected_at: string | null;
+  result_available_at: string | null;
+  reviewed_at: string | null;
 }
 
 export interface Patient {
@@ -170,6 +193,11 @@ export interface FacilityDashboardData {
   referrals_pending_incoming: number;
   queue_depth_now: number;
   high_risk_follow_ups_overdue: number;
+  diagnostics: {
+    pending: number;
+    awaiting_review: number;
+    critical_awaiting_review: number;
+  };
   medicine_availability: {
     total_batches_tracked: number;
     pass_rate_pct: number | null;

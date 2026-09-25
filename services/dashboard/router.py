@@ -79,6 +79,22 @@ def get_facility_dashboard(facility_id: str, db: sqlite3.Connection = Depends(_d
         (facility_id, f"{today}%"),
     ).fetchone()["c"]
 
+    # Diagnostic coordination widget — scoped to orders THIS facility
+    # performs (performing_facility_id), since that's the facility whose
+    # lab/imaging workload the number represents, not wherever the order
+    # happened to be placed from.
+    diagnostics_row = db.execute(
+        """
+        SELECT
+            SUM(CASE WHEN status IN ('ORDERED', 'SAMPLE_COLLECTED') THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status = 'RESULT_AVAILABLE' THEN 1 ELSE 0 END) AS awaiting_review,
+            SUM(CASE WHEN status = 'RESULT_AVAILABLE' AND result_flag = 'CRITICAL' THEN 1 ELSE 0 END) AS critical_awaiting_review
+        FROM diagnostic_orders
+        WHERE performing_facility_id = ?
+        """,
+        (facility_id,),
+    ).fetchone()
+
     # Medicine availability widget — MediTrust's original engine, scoped
     # down to a single dashboard card rather than the app's whole flow.
     medicine_row = db.execute(
@@ -103,6 +119,11 @@ def get_facility_dashboard(facility_id: str, db: sqlite3.Connection = Depends(_d
         "referrals_pending_incoming": referrals_pending,
         "queue_depth_now": queue_depth,
         "high_risk_follow_ups_overdue": high_risk_overdue,
+        "diagnostics": {
+            "pending": diagnostics_row["pending"] or 0,
+            "awaiting_review": diagnostics_row["awaiting_review"] or 0,
+            "critical_awaiting_review": diagnostics_row["critical_awaiting_review"] or 0,
+        },
         "medicine_availability": {
             "total_batches_tracked": total_batches,
             "pass_rate_pct": round((accepted / total_batches) * 100, 1) if total_batches else None,

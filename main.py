@@ -19,8 +19,10 @@ from services.referrals.router import router as referrals_router
 from services.queue.router import router as queue_router
 from services.teleconsult.router import router as teleconsult_router
 from services.followups.router import router as followups_router
+from services.diagnostics.router import router as diagnostics_router
 from services.dashboard.router import router as dashboard_router
 from services.ai.router import router as ai_router
+from services.fhir_export.router import router as fhir_router
 from data.generate_supplier import generate_suppliers
 from data.golden_batches import generate_batches
 from data.seed_recall_demo import generate_recall_demo
@@ -76,8 +78,10 @@ app.include_router(referrals_router)
 app.include_router(queue_router)
 app.include_router(teleconsult_router)
 app.include_router(followups_router)
+app.include_router(diagnostics_router)
 app.include_router(dashboard_router)
 app.include_router(ai_router)
+app.include_router(fhir_router)
 
 @app.get("/health")
 def health():

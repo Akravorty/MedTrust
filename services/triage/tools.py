@@ -8,7 +8,7 @@ would grow into if the services were ever split across real teammates'
 machines.
 
 Every tool returns plain dicts (JSON-serializable) so they can be handed
-straight to Gemini as function_response payloads.
+straight back to the model as tool-result messages.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from shared.database import get_connection
 from services.patients.service import get_patient, get_patient_timeline
-from services.facilities.service import get_facility, next_level_up, find_nearest_at_level
+from services.facilities.service import get_facility, next_level_up, find_nearest_facility
 
 
 def get_patient_profile(tool_input: dict) -> dict:
@@ -78,22 +78,27 @@ def get_facility_capacity(tool_input: dict) -> dict:
 
 def find_referral_target(tool_input: dict) -> dict:
     """Given a home facility and a target level, find the nearest facility
-    at that level in the same district to refer the patient to."""
+    at that level to refer the patient to. `basis` says how 'nearest' was
+    decided: measured straight-line distance, or same-district matching when
+    coordinates are missing."""
     from_facility_id = tool_input.get("from_facility_id", "")
     target_level = tool_input.get("target_level", "")
     conn = get_connection()
     home = get_facility(conn, from_facility_id)
     if home is None:
         return {"error": f"No facility found with id {from_facility_id}"}
-    target = find_nearest_at_level(conn, home["district"], target_level)
-    if target is None:
-        return {"error": f"No {target_level} facility found in district {home['district']}"}
+    nearest = find_nearest_facility(conn, from_facility_id, target_level)
+    if nearest is None:
+        return {"error": f"No {target_level} facility found near facility {from_facility_id}"}
+    target = nearest.facility
     return {
         "facility_id": target["facility_id"],
         "name": target["name"],
         "level": target["level"],
         "district": target["district"],
         "has_teleconsult": bool(target["has_teleconsult"]),
+        "distance_km": nearest.distance_km,
+        "distance_basis": nearest.basis,
     }
 
 

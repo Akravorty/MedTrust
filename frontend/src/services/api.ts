@@ -2,7 +2,7 @@ import {
   BatchDecision, QAResponse, TraceEvent,
   Facility, Patient, TriageResult, Referral, QueueTicket, TeleconsultSession,
   FollowUp, PatientTimeline, PatientVerification, FacilityDashboardData,
-  ReferralStatus, QueueStatus, RiskCategory,
+  ReferralStatus, QueueStatus, RiskCategory, DiagnosticOrder, DiagnosticResultFlag,
 } from '../types/schema';
 
 const API_BASE = import.meta.env.VITE_API_BASE as string;
@@ -79,7 +79,7 @@ export const scanPack = async (file: File | Blob): Promise<IntakeResult> => {
   return res.json();
 };
 
-// ── QA agent — calls the real Gemini tool-using agent, not Groq ────────────
+// ── QA agent — calls the real backend tool-using agent (Groq-hosted model) ────────────
 // POST /agent/qa only takes {query: string}. It resolves its own evidence
 // via get_batch/get_decision/get_trace tools, so the batch_id has to be
 // inside the query text itself, not passed as a separate structured field.
@@ -139,7 +139,7 @@ export const askAgent = async (
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return {
-      answer: `❌ **Agent error:** ${msg}\n\nCheck that the backend is running and GEMINI_API_KEY is set in its .env, then retry.`,
+      answer: `❌ **Agent error:** ${msg}\n\nCheck that the backend is running and GROQ_API_KEY is set in its .env, then retry.`,
       confidence: 0,
       evidence_sources: [],
     };
@@ -306,7 +306,7 @@ export const updateRiskCategory = (
   });
 
 // ── Triage ───────────────────────────────────────────────────────────────
-// NOTE: this is a live multi-tool-call Gemini agent — it can take several
+// NOTE: this is a live multi-tool-call Groq agent — it can take several
 // seconds. Callers should show a "thinking" state, not a spinner that reads
 // as frozen.
 export const runTriage = (
@@ -434,6 +434,63 @@ export const completeFollowUp = (followUpId: string, actor: string): Promise<Fol
   request(`/followups/${encodeURIComponent(followUpId)}/complete`, {
     method: 'POST',
     body: JSON.stringify({ actor }),
+  });
+
+// ── Diagnostics ──────────────────────────────────────────────────────────
+// POST /diagnostics auto-routes to the nearest diagnostics-capable facility
+// when the ordering facility can't run the test itself — `routed` on the
+// response says whether that happened, so the UI can tell the health worker
+// where the sample is actually going.
+export interface CreateDiagnosticOrderInput {
+  patient_id: string;
+  ordering_facility_id: string;
+  test_type: string;
+  reason: string;
+  ordered_by: string;
+}
+
+export const createDiagnosticOrder = (input: CreateDiagnosticOrderInput): Promise<DiagnosticOrder> =>
+  request('/diagnostics', { method: 'POST', body: JSON.stringify(input) });
+
+export const listDiagnosticOrders = (params: {
+  patient_id?: string; performing_facility_id?: string; status?: string;
+} = {}): Promise<DiagnosticOrder[]> => {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v) as [string, string][],
+  ).toString();
+  return request(`/diagnostics${qs ? `?${qs}` : ''}`);
+};
+
+export const getDiagnosticOrder = (diagnosticId: string): Promise<DiagnosticOrder> =>
+  request(`/diagnostics/${encodeURIComponent(diagnosticId)}`);
+
+export const markSampleCollected = (diagnosticId: string, actor: string): Promise<DiagnosticOrder> =>
+  request(`/diagnostics/${encodeURIComponent(diagnosticId)}/sample-collected`, {
+    method: 'POST',
+    body: JSON.stringify({ actor }),
+  });
+
+export const recordDiagnosticResult = (
+  diagnosticId: string,
+  result_flag: DiagnosticResultFlag,
+  result_summary: string,
+  actor: string,
+): Promise<DiagnosticOrder> =>
+  request(`/diagnostics/${encodeURIComponent(diagnosticId)}/result`, {
+    method: 'POST',
+    body: JSON.stringify({ result_flag, result_summary, actor }),
+  });
+
+export const reviewDiagnosticResult = (diagnosticId: string, actor: string): Promise<DiagnosticOrder> =>
+  request(`/diagnostics/${encodeURIComponent(diagnosticId)}/review`, {
+    method: 'POST',
+    body: JSON.stringify({ actor }),
+  });
+
+export const cancelDiagnosticOrder = (diagnosticId: string, actor: string, reason?: string): Promise<DiagnosticOrder> =>
+  request(`/diagnostics/${encodeURIComponent(diagnosticId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ actor, reason }),
   });
 
 // ── Dashboard ────────────────────────────────────────────────────────────

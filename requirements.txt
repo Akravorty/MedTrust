@@ -7,7 +7,7 @@ cloudpickle
 colorama
 elevenlabs
 fastapi
-google-genai
+groq
 h11
 httpx
 idna

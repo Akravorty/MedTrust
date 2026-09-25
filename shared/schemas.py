@@ -156,6 +156,9 @@ class Facility(BaseModel):
     beds_total: int = 0
     beds_occupied: int = 0
     has_teleconsult: bool = True
+    has_diagnostics: bool = True
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class Patient(BaseModel):
@@ -219,6 +222,40 @@ class TeleconsultSession(BaseModel):
     notes: Optional[str] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+
+
+class DiagnosticStatus(str, Enum):
+    ORDERED = "ORDERED"
+    SAMPLE_COLLECTED = "SAMPLE_COLLECTED"
+    RESULT_AVAILABLE = "RESULT_AVAILABLE"
+    REVIEWED = "REVIEWED"
+    CANCELLED = "CANCELLED"
+
+
+class DiagnosticResultFlag(str, Enum):
+    NORMAL = "NORMAL"
+    ABNORMAL = "ABNORMAL"
+    CRITICAL = "CRITICAL"
+
+
+class DiagnosticOrder(BaseModel):
+    diagnostic_id: str
+    patient_id: str
+    ordering_facility_id: str
+    performing_facility_id: str  # may differ from ordering_facility_id — see routing in service.py
+    routed: bool  # True when auto-routed to a different facility than the one that ordered it
+    test_type: str
+    reason: str
+    status: DiagnosticStatus = DiagnosticStatus.ORDERED
+    result_flag: Optional[DiagnosticResultFlag] = None
+    result_summary: Optional[str] = None
+    ordered_by: str
+    reviewed_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    sample_collected_at: Optional[datetime] = None
+    result_available_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
 
 
 class FollowUp(BaseModel):

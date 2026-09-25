@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UserPlus, Stethoscope, Route, Ticket, Video, CalendarClock, LayoutDashboard, Check } from 'lucide-react';
+import { UserPlus, Stethoscope, Route, FlaskConical, Ticket, Video, CalendarClock, LayoutDashboard, Check } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import type { Key } from '../../i18n';
 import type { Patient, TriageResult, Referral } from '../../types/schema';
@@ -9,15 +9,17 @@ import ReferralTracker from './ReferralTracker';
 import QueueScreen from './QueueScreen';
 import TeleconsultScreen from './TeleconsultScreen';
 import FollowUpScreen from './FollowUpScreen';
+import DiagnosticsScreen from './DiagnosticsScreen';
 import FacilityDashboard from './FacilityDashboard';
 import PatientTimeline from './PatientTimeline';
 
-export type CaStep = 'REGISTER' | 'TRIAGE' | 'REFERRAL' | 'QUEUE' | 'TELECONSULT' | 'FOLLOWUP' | 'DASHBOARD';
+export type CaStep = 'REGISTER' | 'TRIAGE' | 'REFERRAL' | 'DIAGNOSTICS' | 'QUEUE' | 'TELECONSULT' | 'FOLLOWUP' | 'DASHBOARD';
 
 const STEPS: { id: CaStep; icon: typeof UserPlus; labelKey: Key }[] = [
   { id: 'REGISTER', icon: UserPlus, labelKey: 'caRegisterTitle' },
   { id: 'TRIAGE', icon: Stethoscope, labelKey: 'caTriageTitle' },
   { id: 'REFERRAL', icon: Route, labelKey: 'caReferralTitle' },
+  { id: 'DIAGNOSTICS', icon: FlaskConical, labelKey: 'caDiagnosticsTitle' },
   { id: 'QUEUE', icon: Ticket, labelKey: 'caQueueTitle' },
   { id: 'TELECONSULT', icon: Video, labelKey: 'caTeleconsultTitle' },
   { id: 'FOLLOWUP', icon: CalendarClock, labelKey: 'caFollowUpTitle' },
@@ -82,8 +84,12 @@ export default function CareAccessFlow() {
           triage={triage}
           defaultActor={actorName}
           onReferralReady={setReferral}
-          onProceedToQueue={() => setStep('QUEUE')}
+          onProceedToQueue={() => setStep('DIAGNOSTICS')}
         />
+      )}
+
+      {step === 'DIAGNOSTICS' && patient && (
+        <DiagnosticsScreen patient={patient} defaultActor={actorName} onNext={() => setStep('QUEUE')} />
       )}
 
       {step === 'QUEUE' && patient && (
