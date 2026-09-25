@@ -3,14 +3,6 @@ shared/database.py
 
 Shared SQLite connection/session layer for MediTrust.
 
-This file was empty in the repo. services/ledger needs a real DB to write
-to, and the integration master doc (Section 1) says all backend modules
-share this one file rather than each spinning up their own connection.
-Built here minimally and generically on purpose — it knows nothing about
-ledgers, batches, or any domain table. Person 1 / Person 2 should be able
-to import get_connection()/get_db() the same way and create their own
-tables without touching this file.
-
 Design:
 - One SQLite file, local dev, zero setup (per master doc Section 1).
 - A single shared connection per process with `check_same_thread=False`,
@@ -53,18 +45,10 @@ def get_connection() -> sqlite3.Connection:
 @contextmanager
 def get_db():
     """
-    FastAPI-dependency-friendly context manager. Usage:
-
-        from shared.database import get_db
-
-        @router.post("/ledger/log")
-        def log_event(db: sqlite3.Connection = Depends(get_db)):
-            ...
-
-    Yields the shared connection. Does not close it (the connection is
-    process-lifetime), but callers should still use explicit transactions
-    (BEGIN/COMMIT/ROLLBACK) around multi-statement writes rather than
-    relying on autocommit.
+    FastAPI-dependency-friendly context manager. Yields the shared
+    connection. Does not close it (the connection is process-lifetime), but
+    callers should still use explicit transactions around multi-statement
+    writes rather than relying on autocommit.
     """
     conn = get_connection()
     try:
@@ -75,14 +59,36 @@ def get_db():
 
 def init_db() -> None:
     """
-    Create any tables that don't exist yet. Each service should define its
-    own `ensure_schema(conn)`-style function and call it from here, rather
-    than this file knowing about domain tables directly. Call this once at
-    app startup (see main.py).
+    Create any tables that don't exist yet. Each service defines its own
+    `ensure_*_schema(conn)` and registers it here, rather than this file
+    knowing about domain tables directly. Called once at app startup
+    (see main.py).
     """
     from services.ledger.service import ensure_ledger_schema
     from services.intake.service import ensure_intake_schema
+    from services.risk_engine.storage import ensure_risk_schema, ensure_receipts_schema
+    from services.alerts.service import ensure_alerts_schema
+    from services.facilities.service import ensure_facilities_schema
+    from services.patients.service import ensure_patients_schema
+    from services.triage.service import ensure_triage_schema
+    from services.referrals.service import ensure_referrals_schema
+    from services.queue.service import ensure_queue_schema
+    from services.teleconsult.service import ensure_teleconsult_schema
+    from services.followups.service import ensure_followups_schema
+    from services.diagnostics.service import ensure_diagnostics_schema
+
     conn = get_connection()
     ensure_ledger_schema(conn)
     ensure_intake_schema(conn)
+    ensure_risk_schema(conn)
+    ensure_receipts_schema(conn)
+    ensure_alerts_schema(conn)
+    ensure_facilities_schema(conn)
+    ensure_patients_schema(conn)
+    ensure_triage_schema(conn)
+    ensure_referrals_schema(conn)
+    ensure_queue_schema(conn)
+    ensure_teleconsult_schema(conn)
+    ensure_followups_schema(conn)
+    ensure_diagnostics_schema(conn)
     conn.commit()

@@ -2,17 +2,12 @@
 // src/services/aiAgent.ts
 //
 // Isolated AI agent service for the MediTrust dashboard (Person 5 scope).
-// Uses Groq's free-tier API (OpenAI-compatible REST format).
+// Calls the backend /ai/complete proxy (which talks to Groq server-side).
 // This file does NOT modify or depend on any other teammate's code —
 // it only reads whatever decision/batch data you pass into it,
 // so it's safe to drop in without touching shared/schemas.py consumers.
 
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
-
-// Fast, free, solid quality model on Groq as of now.
-// Swap the model string if Groq deprecates/renames it later.
-const MODEL = "openai/gpt-oss-120b";
+const API_BASE = import.meta.env.VITE_API_BASE as string;
 
 interface AgentResponse {
   text: string;
@@ -20,43 +15,28 @@ interface AgentResponse {
 }
 
 /**
- * Generic call to the Groq chat completion endpoint.
+ * Generic call to the backend AI proxy (POST /ai/complete).
+ * The Groq API key lives on the server only; never put provider keys in a
+ * VITE_* variable, because Vite bundles those into public browser JS.
  * Keep this as the single low-level function; build higher-level
  * helpers (below) on top of it so prompt logic stays in one place.
  */
-async function callGroq(systemPrompt: string, userPrompt: string): Promise<AgentResponse> {
-  if (!GROQ_API_KEY) {
-    return { text: "", error: "Missing VITE_GROQ_API_KEY. Check your .env file." };
-  }
-
+async function callAI(systemPrompt: string, userPrompt: string): Promise<AgentResponse> {
   try {
-    const response = await fetch(GROQ_API_URL, {
+    const response = await fetch(`${API_BASE}/ai/complete`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.3,
-        max_tokens: 500,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ system_prompt: systemPrompt, user_prompt: userPrompt }),
     });
 
     if (!response.ok) {
-      const errBody = await response.text();
-      return { text: "", error: `Groq API error ${response.status}: ${errBody}` };
+      return { text: "", error: `AI service error ${response.status}` };
     }
 
     const data = await response.json();
-    const text = data.choices?.[0]?.message?.content ?? "";
-    return { text };
+    return { text: data.text ?? "" };
   } catch (err) {
-    return { text: "", error: err instanceof Error ? err.message : "Unknown error calling Groq" };
+    return { text: "", error: err instanceof Error ? err.message : "Unknown error calling AI service" };
   }
 }
 
@@ -85,7 +65,7 @@ export async function explainDecision(batchData: Record<string, unknown>): Promi
     `Full batch data:\n${JSON.stringify(batchData, null, 2)}\n\n` +
     `Explain why this exact decision was made, using only the data above.`;
 
-  return callGroq(systemPrompt, userPrompt);
+  return callAI(systemPrompt, userPrompt);
 }
 
 /**
@@ -99,5 +79,5 @@ export async function summarizeActivity(recentBatches: Record<string, unknown>[]
 
   const userPrompt = `Recent batches:\n${JSON.stringify(recentBatches, null, 2)}`;
 
-  return callGroq(systemPrompt, userPrompt);
+  return callAI(systemPrompt, userPrompt);
 }

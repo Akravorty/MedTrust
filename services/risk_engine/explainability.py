@@ -24,6 +24,7 @@ FEATURE_DISPLAY_LABELS = {
     "physical_inspection_flag_count": "Physical inspection flags",
     "days_since_manufacture": "Batch age since manufacture",
     "batch_size": "Batch size",
+    "shelf_life_remaining_pct": "Shelf life remaining (%)",
 }
 
 TOP_N_CONTRIBUTORS = 4
@@ -86,6 +87,7 @@ def build_reasons(contributors: list[dict]) -> list[str]:
         "days_to_expiry": "This batch is close to its expiry date.",
         "days_since_manufacture": "This batch's age since manufacture is contributing to the risk estimate.",
         "batch_size": "Batch size is contributing to the risk estimate.",
+        "shelf_life_remaining_pct": "This batch has a low proportion of its total shelf life remaining.",
     }
 
     reasons = []

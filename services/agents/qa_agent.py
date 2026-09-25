@@ -1,7 +1,7 @@
 """
 services/agents/qa_agent.py
 
-Person 4 (Agentic Layer) — Evidence-Grounded Q&A Agent for MediTrust using Gemini.
+Person 4 (Agentic Layer) — Evidence-Grounded Q&A Agent for MediTrust using Groq.
 """
 
 from __future__ import annotations
@@ -11,11 +11,10 @@ import os
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+from groq import APIStatusError, Groq
 from pydantic import ValidationError
 
+from services import llm
 from services.agents.tools import execute_tool
 from shared.schemas import AgentResponse
 
@@ -23,9 +22,8 @@ load_dotenv()
 
 logger = logging.getLogger("meditrust.agents.qa_agent")
 
-# Fix 1: Use valid, current Gemini model
-DEFAULT_PRIMARY_MODEL = "gemini-3.6-flash"
-QA_AGENT_MODEL = os.environ.get("QA_AGENT_MODEL", DEFAULT_PRIMARY_MODEL)
+# Model comes from QA_AGENT_MODEL, else GROQ_MODEL, else the shared default (see services/llm.py).
+QA_AGENT_MODEL = llm.resolve_model("QA_AGENT_MODEL")
 
 MAX_TOOL_ITERATIONS = 5
 _VALID_CONFIDENCE = {"HIGH", "MEDIUM", "INSUFFICIENT_EVIDENCE"}
@@ -51,154 +49,88 @@ STRICT GROUNDING RULES:
 3. When ready to answer, call the submit_answer tool exactly once as your final action.
 """
 
-# Tool Declarations
-get_batch_decl = types.FunctionDeclaration(
-    name="get_batch",
-    description="Fetch medicine batch details by batch_id.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {"batch_id": {"type": "STRING", "description": "The batch identifier."}},
-        "required": ["batch_id"],
-    },
-)
+# Tool Declarations (OpenAI-compatible, as Groq expects)
+_BATCH_ID_PROP = {"batch_id": {"type": "string", "description": "The batch identifier."}}
 
-get_decision_decl = types.FunctionDeclaration(
-    name="get_decision",
-    description="Fetch risk decision details for a batch_id.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {"batch_id": {"type": "STRING", "description": "The batch identifier."}},
-        "required": ["batch_id"],
-    },
-)
-
-get_trace_decl = types.FunctionDeclaration(
-    name="get_trace",
-    description="Fetch audit trace log for a batch_id.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {"batch_id": {"type": "STRING", "description": "The batch identifier."}},
-        "required": ["batch_id"],
-    },
-)
-
-get_supplier_history_decl = types.FunctionDeclaration(
-    name="get_supplier_history",
-    description="Fetch supplier metrics and historical ratings by supplier_id.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {"supplier_id": {"type": "STRING", "description": "The supplier identifier."}},
-        "required": ["supplier_id"],
-    },
-)
-
-submit_answer_decl = types.FunctionDeclaration(
-    name="submit_answer",
-    description="Call this exactly once, as your final action, to submit your grounded answer.",
-    parameters={
-        "type": "OBJECT",
-        "properties": {
-            "answer": {"type": "STRING", "description": "The grounded answer to the user's query."},
+_TOOLS = [
+    llm.function_tool("get_batch", "Fetch medicine batch details by batch_id.", _BATCH_ID_PROP, ["batch_id"]),
+    llm.function_tool("get_decision", "Fetch risk decision details for a batch_id.", _BATCH_ID_PROP, ["batch_id"]),
+    llm.function_tool("get_trace", "Fetch audit trace log for a batch_id.", _BATCH_ID_PROP, ["batch_id"]),
+    llm.function_tool(
+        "get_supplier_history",
+        "Fetch supplier metrics and historical ratings by supplier_id.",
+        {"supplier_id": {"type": "string", "description": "The supplier identifier."}},
+        ["supplier_id"],
+    ),
+    llm.function_tool(
+        "submit_answer",
+        "Call this exactly once, as your final action, to submit your grounded answer.",
+        {
+            "answer": {"type": "string", "description": "The grounded answer to the user's query."},
             "confidence": {
-                "type": "STRING",
+                "type": "string",
                 "enum": ["HIGH", "MEDIUM", "INSUFFICIENT_EVIDENCE"],
                 "description": "Confidence level based strictly on retrieved tool evidence.",
             },
             "evidence_sources": {
-                "type": "ARRAY",
-                "items": {"type": "STRING"},
+                "type": "array",
+                "items": {"type": "string"},
                 "description": "Exact JSON keys / timestamps from tool results.",
             },
         },
-        "required": ["answer", "confidence", "evidence_sources"],
-    },
-)
-
-_GEMINI_TOOLS = types.Tool(
-    function_declarations=[
-        get_batch_decl,
-        get_decision_decl,
-        get_trace_decl,
-        get_supplier_history_decl,
-        submit_answer_decl,
-    ]
-)
+        ["answer", "confidence", "evidence_sources"],
+    ),
+]
 
 
-def _build_client() -> genai.Client:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise AgentUnavailableError("GEMINI_API_KEY is not configured in .env file.")
-    return genai.Client(api_key=api_key)
+def _build_client() -> Groq:
+    return llm.build_client(AgentUnavailableError)
 
 
 def run_qa_agent(query: str, model: Optional[str] = None) -> AgentResponse:
     client = _build_client()
     active_model = model or QA_AGENT_MODEL
 
-    contents: List[Any] = [
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=query)],
-        )
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": query},
     ]
-
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
-        temperature=0.0,
-        tools=[_GEMINI_TOOLS],
-    )
 
     for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
         try:
-            response = client.models.generate_content(
+            response = llm.chat(
+                client,
                 model=active_model,
-                contents=contents,
-                config=config,
+                messages=messages,
+                tools=_TOOLS,
+                tool_choice="auto",
+                temperature=0.0,
             )
-        except APIError as exc:
-            logger.error("Gemini API Error: %s", exc)
-            raise AgentUnavailableError(f"Gemini API Error: {str(exc)}", exc) from exc
+        except APIStatusError as exc:
+            logger.error("Groq API Error: %s", exc)
+            raise AgentUnavailableError(f"Groq API Error: {str(exc)}", exc) from exc
         except Exception as exc:
-            logger.error("Could not connect to Gemini API: %s", exc)
-            raise AgentUnavailableError(f"Could not connect to Gemini API: {str(exc)}", exc) from exc
+            logger.error("Could not connect to Groq API: %s", exc)
+            raise AgentUnavailableError(f"Could not connect to Groq API: {str(exc)}", exc) from exc
 
-        if response.candidates and response.candidates[0].content:
-            contents.append(response.candidates[0].content)
+        message = llm.message_of(response)
+        messages.append(llm.assistant_turn(message))
+        tool_calls = llm.tool_calls_of(message)
 
-        if response.function_calls:
-            submit_call = next(
-                (call for call in response.function_calls if call.name == "submit_answer"),
-                None,
-            )
+        if tool_calls:
+            submit_call = next((c for c in tool_calls if c.function.name == "submit_answer"), None)
             if submit_call is not None:
-                # Fix 2: Cast protobuf struct args to dict
-                args = dict(submit_call.args) if submit_call.args else {}
-                return _finalize(query, args)
+                return _finalize(query, llm.call_args(submit_call))
 
-            function_responses = []
-            for call in response.function_calls:
-                call_args = dict(call.args) if call.args else {}
-                result = execute_tool(call.name, call_args)
-                function_responses.append(
-                    types.Part.from_function_response(
-                        name=call.name,
-                        response={"result": result},
-                    )
-                )
-
-            # Fix 3: Use role="user" for returning function responses
-            contents.append(types.Content(role="user", parts=function_responses))
+            for call in tool_calls:
+                result = execute_tool(call.function.name, llm.call_args(call))
+                messages.append(llm.tool_result_turn(call, result))
         else:
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(
-                            text="You must either call one of the data tools or call submit_answer to finalize your response."
-                        )
-                    ],
-                )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "You must either call one of the data tools or call submit_answer to finalize your response.",
+                }
             )
 
     return AgentResponse(
