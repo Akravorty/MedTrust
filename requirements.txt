@@ -38,3 +38,10 @@ uvicorn
 xgboost
 python-multipart
 qrcode
+
+opencv-python-headless
+pytesseract
+requests
+Pillow
+
+# system dependency: tesseract-ocr (apt install tesseract-ocr)

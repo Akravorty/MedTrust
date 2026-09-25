@@ -20,12 +20,17 @@ from services.queue.router import router as queue_router
 from services.teleconsult.router import router as teleconsult_router
 from services.followups.router import router as followups_router
 from services.dashboard.router import router as dashboard_router
+from services.ai.router import router as ai_router
 from data.generate_supplier import generate_suppliers
 from data.golden_batches import generate_batches
 from data.seed_recall_demo import generate_recall_demo
 from data.seed_care_access import generate_care_access_demo
 from data.seed_realistic_batches import generate_realistic_batches
 from contextlib import asynccontextmanager
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,13 +45,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MediTrust", lifespan=lifespan)
 
+# Comma-separated list in CORS_ORIGINS; defaults to the local Vite dev server.
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+]
+
 # Without this, every fetch() from the Vite dev server (localhost:5173) to
 # this API (localhost:8000) is blocked by the browser before your code ever
 # runs — Step 6 is invisible without it, and none of the errors it throws
 # mention CORS by name, which is why it's easy to miss.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +77,7 @@ app.include_router(queue_router)
 app.include_router(teleconsult_router)
 app.include_router(followups_router)
 app.include_router(dashboard_router)
+app.include_router(ai_router)
 
 @app.get("/health")
 def health():
