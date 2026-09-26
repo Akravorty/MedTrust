@@ -294,16 +294,16 @@ function App() {
 
           <div className="ca-mode-toggle">
             <button
-              className={mode === 'BATCH' ? 'ca-mode-toggle--active' : ''}
-              onClick={() => setMode('BATCH')}
-            >
-              {t('caModeBatch')}
-            </button>
-            <button
               className={mode === 'CARE_ACCESS' ? 'ca-mode-toggle--active' : ''}
               onClick={() => setMode('CARE_ACCESS')}
             >
               {t('caModeToggle')}
+            </button>
+            <button
+              className={mode === 'BATCH' ? 'ca-mode-toggle--active' : ''}
+              onClick={() => setMode('BATCH')}
+            >
+              {t('caModeBatch')}
             </button>
           </div>
 
