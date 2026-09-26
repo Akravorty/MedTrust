@@ -40,7 +40,14 @@ export const scanBatch = async (
   return {
     batch_id: d.batch_id,
     status: d.decision,                      // "ACCEPT" | "HOLD" | "REJECT"
-    confidence: Number((1 - d.risk_score).toFixed(2)),
+    // Confidence = "how sure is the system in this decision", not "how
+    // safe is the batch". A hard rule firing (triggered_rule set) is
+    // maximum certainty by definition. Otherwise: ACCEPT's confidence is
+    // how far risk_score sits below the danger zone; HOLD/REJECT's
+    // confidence is how far risk_score sits into it.
+    confidence: d.triggered_rule
+      ? 1
+      : Number((d.decision === 'ACCEPT' ? 1 - d.risk_score : d.risk_score).toFixed(2)),
     risk_score: d.risk_score,
     triggered_rule: d.triggered_rule,
     reasons: d.reasons,
