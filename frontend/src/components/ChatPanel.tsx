@@ -50,7 +50,12 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to latest message
+  const isFirstRender = useRef(true);
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
@@ -84,7 +89,7 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
   };
 
   return (
-    <div className="card chat-panel-card flex-col" style={{ height: '580px', padding: 0, overflow: 'hidden' }}>
+    <div className="card chat-panel-card flex-col" style={{ height: '100%', padding: 0, overflow: 'hidden' }}>
 
       {/* Header */}
       <div className="chat-header">
