@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Settings, ChevronDown, ChevronUp,
   CheckCircle2, AlertTriangle, XCircle, Biohazard, RotateCcw
@@ -52,14 +52,6 @@ const MODES = [
 export default function DemoToggle({ onForceState }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [active, setActive] = useState<DemoMode>(null);
-
-  // Open straight into the HOLD decision view on first load, instead of
-  // requiring the user to manually pick a demo mode from the panel first.
-  useEffect(() => {
-    setActive('DEMO-HOLD');
-    onForceState('DEMO-HOLD');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleSelect = (mode: DemoMode) => {
     setActive(mode);
