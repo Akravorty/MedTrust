@@ -66,7 +66,7 @@ export default function CareAccessFlow() {
           </div>
           <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             Current workflow:
-            <span className="ca-badge ca-badge--info">{t(STEPS.find(s => s.id === step)?.labelKey || '')}</span>
+            <span className="ca-badge ca-badge--info">{t(STEPS.find(s => s.id === step)?.labelKey || 'caLoading')}</span>
           </div>
         </div>
       )}

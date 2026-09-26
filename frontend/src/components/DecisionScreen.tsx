@@ -94,6 +94,19 @@ export default function DecisionScreen({ decision }: Props) {
     name: f.display_label,
     impact: f.value
   }));
+  // Rule-triggered decisions (e.g. RULE_EXPIRED_BATCH) never have SHAP
+  // contributors -- there's no model ambiguity for a hard rule to explain.
+  // An empty chart area reads as broken, so show why explicitly instead.
+  const decidedByRule = chartData.length === 0 && !!decision.triggered_rule;
+
+  const impactValues = chartData.map(d => d.impact);
+  const rawMin = Math.min(0, ...impactValues);
+  const rawMax = Math.max(0, ...impactValues);
+  const pad = (rawMax - rawMin) * 0.12 || 1;
+  const xDomain: [number, number] = [
+    rawMin < 0 ? rawMin - pad : 0,
+    rawMax > 0 ? rawMax + pad : 0,
+  ];
 
   if (loading) {
     return (
@@ -174,6 +187,23 @@ export default function DecisionScreen({ decision }: Props) {
           <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 500 }}>Higher = Increased Risk</span>
         </div>
 
+        {decidedByRule ? (
+          <div style={{
+            height: '210px', width: '100%', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+            background: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1',
+            padding: '1rem', textAlign: 'center',
+          }}>
+            <ShieldAlert size={28} color="#64748b" strokeWidth={1.8} />
+            <p style={{ margin: 0, fontSize: '0.88rem', fontWeight: 600, color: '#334155' }}>
+              Decided by a safety rule, not the risk model
+            </p>
+            <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b', maxWidth: '360px' }}>
+              Rule <code>{decision.triggered_rule}</code> triggered automatically -- there's no
+              model feature-importance to show for a deterministic safety override.
+            </p>
+          </div>
+        ) : (
         <div style={{ height: '210px', width: '100%' }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
@@ -197,9 +227,18 @@ export default function DecisionScreen({ decision }: Props) {
               
               <XAxis
                 type="number"
+                // Bug fix: when every SHAP value shares one sign (e.g. an
+                // all-ACCEPT batch where every factor decreases risk),
+                // Recharts' auto domain excludes 0 -- bars then render
+                // from the wrong baseline, making the largest-magnitude
+                // bar fill the whole width and the rest collapse to
+                // slivers. Forcing 0 into the domain fixes the baseline
+                // for every sign combination.
+                domain={xDomain}
                 axisLine={{ stroke: '#cbd5e1', strokeWidth: 1.5 }}
                 tickLine={{ stroke: '#cbd5e1' }}
                 tick={{ fill: '#64748b', fontSize: 11, fontWeight: 500 }}
+                tickFormatter={(v: number) => v.toFixed(1)}
               />
               
               <YAxis
@@ -241,6 +280,7 @@ export default function DecisionScreen({ decision }: Props) {
             </BarChart>
           </ResponsiveContainer>
         </div>
+        )}
       </div>
     </div>
   );

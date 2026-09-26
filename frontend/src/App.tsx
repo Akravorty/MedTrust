@@ -107,6 +107,22 @@ function App() {
     }
   }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Browsers restore the previous scroll position on reload for the
+  // same URL (history.scrollRestoration defaults to 'auto'). Since this is
+  // a single-page app, navigating between scan/decision/recall doesn't
+  // change the URL, so a fresh decision view could otherwise open already
+  // scrolled to wherever the user last was. Force scroll-to-top whenever
+  // we land on a new appState, and disable browser auto-restoration.
+  useEffect(() => {
+    if ('scrollRestoration' in window.history) {
+      window.history.scrollRestoration = 'manual';
+    }
+  }, []);
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [appState]);
+
   // On mount: show any scans already queued from a previous offline session.
   // On reconnect: replay them (each carrying its own Idempotency-Key so a
   // replay that the server already saw doesn't create a duplicate decision
@@ -362,8 +378,8 @@ function App() {
         )}
 
         {mode === 'BATCH' && appState === 'DECISION' && decision && (
-          <div className="flex-row gap-6" style={{ alignItems: 'flex-start' }}>
-            <div className="flex-col gap-6" style={{ flex: 2 }}>
+          <div className="flex-col gap-6">
+            <>
               {alerts.length > 0 && (
                 <div className="card" role="status" style={{ borderLeft: '4px solid #ef4444' }}>
                   <strong>Alert sent to {alerts[0].recipient}</strong>
@@ -376,13 +392,17 @@ function App() {
                   </p>
                 </div>
               )}
-              <DecisionScreen decision={decision} />
-              <AuditTrail batchId={batchId!} />
-              <RecallFlow batchId={batchId!} onRecallTriggered={handleRecallTriggered} />
+            </>
+            <div className="flex-row gap-6" style={{ alignItems: 'stretch' }}>
+              <div style={{ flex: 1.3, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                <DecisionScreen decision={decision} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                <ChatPanel batchData={decision} />
+              </div>
             </div>
-            <div style={{ flex: 1, position: 'sticky', top: '5.5rem' }}>
-              <ChatPanel batchData={decision} />
-            </div>
+            <AuditTrail batchId={batchId!} />
+            <RecallFlow batchId={batchId!} onRecallTriggered={handleRecallTriggered} />
           </div>
         )}
 
