@@ -11,3 +11,4 @@ frontend/.env
 venv/
 .venv/
 .vercel
+.vercel/
