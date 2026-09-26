@@ -105,16 +105,18 @@ export default function TriageScreen({ patient, defaultActor, onTriaged, onCreat
         </div>
 
         {thinking && (
-          <div
-            className="animate-pulse"
-            style={{
-              marginTop: '1.25rem', padding: '1rem 1.25rem', borderRadius: '12px',
-              background: '#ede9fe', color: '#5b21b6', fontWeight: 600,
-              display: 'flex', alignItems: 'center', gap: '0.6rem',
-            }}
-          >
-            <Sparkles size={18} className="animate-pulse" />
-            {t('caTriageThinking')}
+          <div className="ca-ai-processing">
+            <div className="ca-ai-processing-spinner">
+              <Sparkles size={24} className="animate-spin-slow" style={{ color: '#8b5cf6' }} />
+            </div>
+            <div className="ca-ai-processing-text">
+              <strong style={{ display: 'block', fontSize: '1.05rem', color: '#5b21b6', marginBottom: '0.2rem' }}>
+                {t('caTriageThinking') || 'AI is analyzing symptoms...'}
+              </strong>
+              <span style={{ fontSize: '0.85rem', color: '#7c3aed' }}>
+                Evaluating urgency and identifying required specialties.
+              </span>
+            </div>
           </div>
         )}
       </div>

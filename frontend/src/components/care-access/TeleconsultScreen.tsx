@@ -98,7 +98,12 @@ export default function TeleconsultScreen({ patient, triage, referral, defaultAc
             <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '0.6rem', borderRadius: '12px', display: 'flex' }}>
               <Video size={22} strokeWidth={2.2} />
             </div>
-            <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caTeleconsultTitle')}</h2>
+            <div>
+              <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caTeleconsultTitle')}</h2>
+              <div className="ca-section-subtitle" style={{ marginBottom: 0 }}>
+                {patient.name}, {patient.age} — {patient.home_facility_id}
+              </div>
+            </div>
           </div>
 
           <div className={`ca-video-frame ${session?.status === 'ACTIVE' ? 'ca-video-frame--active' : ''}`}>
@@ -107,10 +112,13 @@ export default function TeleconsultScreen({ patient, triage, referral, defaultAc
             )}
             <div className="ca-video-avatar">{(session?.doctor_name || doctorName || 'Dr').charAt(0).toUpperCase()}</div>
             <div style={{ fontWeight: 700 }}>{session?.doctor_name || doctorName || t('caDoctorName')}</div>
-            <div style={{ fontSize: '0.8rem', opacity: 0.75 }}>
+            <div style={{ fontSize: '0.8rem', opacity: 0.75, display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'center' }}>
+              {session?.status === 'ACTIVE' && (
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', display: 'inline-block', boxShadow: '0 0 0 2px rgba(34,197,94,0.3)', animation: 'pulse 1.5s infinite' }} />
+              )}
               {!session && 'Not scheduled'}
               {session?.status === 'SCHEDULED' && 'Scheduled — ready to start'}
-              {session?.status === 'ACTIVE' && 'Live'}
+              {session?.status === 'ACTIVE' && 'Call active'}
               {session?.status === 'COMPLETED' && 'Call ended'}
             </div>
           </div>
@@ -142,7 +150,7 @@ export default function TeleconsultScreen({ patient, triage, referral, defaultAc
             )}
             {session?.status === 'COMPLETED' && (
               <button className="ca-btn ca-btn--success" onClick={onCompleted}>
-                {t('caNext')} <ArrowRight size={14} />
+                Proceed to Follow-up <ArrowRight size={14} />
               </button>
             )}
           </div>
@@ -185,7 +193,7 @@ export default function TeleconsultScreen({ patient, triage, referral, defaultAc
           )}
 
           {error && (
-            <div role="alert" style={{ marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 600, background: 'var(--color-reject-bg)', color: 'var(--color-reject)' }}>
+            <div className="ca-alert ca-alert--error" role="alert" style={{ marginTop: '1rem' }}>
               {error}
             </div>
           )}

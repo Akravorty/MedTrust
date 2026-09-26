@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UserPlus, Stethoscope, Route, FlaskConical, Ticket, Video, CalendarClock, LayoutDashboard, Check } from 'lucide-react';
+import { UserPlus, Stethoscope, Route, FlaskConical, Ticket, Video, CalendarClock, LayoutDashboard, Check, User } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import type { Key } from '../../i18n';
 import type { Patient, TriageResult, Referral } from '../../types/schema';
@@ -46,6 +46,31 @@ export default function CareAccessFlow() {
 
   return (
     <div>
+      {patient && (
+        <div className="ca-patient-context-bar" style={{
+          display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center',
+          background: 'var(--kpi-card-bg)', border: '1px solid var(--kpi-card-border)', borderRadius: '12px',
+          padding: '0.75rem 1rem', marginBottom: '1rem', gap: '1rem',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '0.4rem', borderRadius: '8px' }}>
+              <User size={16} strokeWidth={2.5} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, color: 'var(--color-text-primary)' }}>{patient.name}</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+                {patient.age}y, {patient.gender} · ID: <span style={{ fontFamily: 'monospace' }}>{patient.patient_id}</span>
+              </div>
+            </div>
+          </div>
+          <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            Current workflow:
+            <span className="ca-badge ca-badge--info">{t(STEPS.find(s => s.id === step)?.labelKey || '')}</span>
+          </div>
+        </div>
+      )}
+
       <div className="ca-stepper">
         {STEPS.map(({ id, icon: Icon, labelKey }, i) => (
           <button

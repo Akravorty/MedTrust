@@ -5,7 +5,8 @@ import {
   ReferralStatus, QueueStatus, RiskCategory, DiagnosticOrder, DiagnosticResultFlag,
 } from '../types/schema';
 
-const API_BASE = import.meta.env.VITE_API_BASE as string;
+const API_BASE: string =
+  (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:5000';
 
 // Full English names, so the model reliably knows what "mr" or "or" means -
 // matches the `name` field in frontend/src/i18n.tsx.

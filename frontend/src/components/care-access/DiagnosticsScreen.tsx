@@ -81,7 +81,12 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
             <div style={{ background: '#ede9fe', color: '#7c3aed', padding: '0.6rem', borderRadius: '12px', display: 'flex' }}>
               <FlaskConical size={22} strokeWidth={2.2} />
             </div>
-            <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caDiagnosticsTitle')}</h2>
+            <div>
+              <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caDiagnosticsTitle')}</h2>
+              <div className="ca-section-subtitle" style={{ marginBottom: 0 }}>
+                {patient.name}, {patient.age} — {patient.home_facility_id}
+              </div>
+            </div>
           </div>
           <button className="ca-btn ca-btn--sm ca-btn--secondary" onClick={() => setShowForm((s) => !s)}>
             <Plus size={14} /> {t('caOrderTest')}
@@ -111,7 +116,10 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
         )}
 
         {loading ? (
-          <div className="ca-empty-state">{t('caLoading')}</div>
+          <div className="ca-empty-state ca-loading-pulse">
+            <div className="ca-spinner" style={{ margin: '0 auto 1rem' }}></div>
+            {t('caLoading')}
+          </div>
         ) : openOrders.length === 0 ? (
           <div className="ca-empty-state">{t('caNoOpenDiagnostics')}</div>
         ) : (
@@ -126,7 +134,7 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
                       <span className="ca-row-sub">
                         {t('caPerformingFacility')}: {o.performing_facility_id}
                         {o.routed && <em style={{ marginLeft: 6 }}>({t('caRoutedNotice')})</em>}
-                        {' · '}{o.status}
+                        {' · '}<span className="ca-badge ca-badge--neutral">{o.status}</span>
                       </span>
                     </div>
                     <button
@@ -140,7 +148,7 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
 
                   {o.status === 'ORDERED' && (
                     <button
-                      className="ca-btn ca-btn--sm ca-btn--success"
+                      className="ca-btn ca-btn--sm ca-btn--primary"
                       onClick={() => withErrorHandling(() => markSampleCollected(o.diagnostic_id, defaultActor))}
                     >
                       <Beaker size={14} /> {t('caSampleCollected')}
@@ -148,7 +156,7 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
                   )}
 
                   {o.status === 'SAMPLE_COLLECTED' && (
-                    <div className="flex-row items-center gap-2" style={{ flexWrap: 'wrap' }}>
+                    <div className="flex-row items-center gap-2" style={{ flexWrap: 'wrap', background: 'var(--bg-secondary)', padding: '0.5rem', borderRadius: '8px' }}>
                       <select
                         className="ca-select"
                         value={draft.flag}
@@ -175,7 +183,7 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
                   )}
 
                   {o.status === 'RESULT_AVAILABLE' && (
-                    <div className="flex-row items-center justify-between" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div className="flex-row items-center justify-between" style={{ flexWrap: 'wrap', gap: '0.5rem', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '0.75rem', borderRadius: '8px' }}>
                       <span>
                         <strong style={{ color: o.result_flag ? RESULT_FLAG_COLOR[o.result_flag] : undefined }}>{o.result_flag}</strong>
                         {' — '}{o.result_summary}
@@ -201,7 +209,7 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
                 <div className="ca-row-main">
                   <span className="ca-row-title">{o.test_type} — {o.reason}</span>
                   <span className="ca-row-sub">
-                    {o.status}
+                    <span className="ca-badge ca-badge--neutral">{o.status}</span>
                     {o.result_flag && ` · ${o.result_flag}`}
                     {o.result_summary && ` — ${o.result_summary}`}
                   </span>
@@ -212,14 +220,14 @@ export default function DiagnosticsScreen({ patient, defaultActor, onNext }: Pro
         )}
 
         {error && (
-          <div role="alert" style={{ marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 600, background: 'var(--color-reject-bg)', color: 'var(--color-reject)' }}>
+          <div className="ca-alert ca-alert--error" role="alert" style={{ marginTop: '1rem' }}>
             {error}
           </div>
         )}
 
         <div className="ca-actions-row">
           <button className="ca-btn ca-btn--secondary" onClick={onNext}>
-            {t('caQueueTitle')} <ArrowRight size={14} />
+            Proceed to Queue <ArrowRight size={14} />
           </button>
         </div>
       </div>

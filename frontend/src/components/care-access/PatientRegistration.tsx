@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UserPlus, WifiOff } from 'lucide-react';
+import { UserPlus, WifiOff, Loader2 } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import { useFacilities, facilityLabel } from '../../hooks/useFacilities';
 import { registerPatient } from '../../services/api';
@@ -119,28 +119,37 @@ export default function PatientRegistration({ defaultActor, onRegistered }: Prop
         </div>
         <div className="ca-field">
           <label htmlFor="ca-phone">{t('caPhone')}</label>
-          <input id="ca-phone" className="ca-input" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <input id="ca-phone" className="ca-input" placeholder="Optional" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </div>
       </form>
 
       {message && (
         <div
           role="alert"
+          className="animate-fade-in"
           style={{
-            marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 600,
-            display: 'flex', alignItems: 'center', gap: '0.5rem',
+            marginTop: '1.25rem', padding: '0.85rem 1.15rem', borderRadius: '10px', fontWeight: 600,
+            display: 'flex', alignItems: 'center', gap: '0.6rem',
             background: message.kind === 'error' ? 'var(--color-reject-bg)' : 'var(--color-hold-bg)',
             color: message.kind === 'error' ? 'var(--color-reject)' : '#92400e',
+            border: `1px solid ${message.kind === 'error' ? 'var(--color-reject)' : '#b45309'}`,
           }}
         >
-          {message.kind === 'info' && <WifiOff size={16} />}
+          {message.kind === 'info' && <WifiOff size={18} />}
           {message.text}
         </div>
       )}
 
       <div className="ca-actions-row">
         <button type="submit" className="ca-btn ca-btn--primary" onClick={handleSubmit} disabled={submitting}>
-          {submitting ? t('caRegistering') : t('caSubmit')}
+          {submitting ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              {t('caRegistering')}
+            </>
+          ) : (
+            t('caSubmit')
+          )}
         </button>
       </div>
     </div>

@@ -75,7 +75,12 @@ export default function FollowUpScreen({ patient, defaultActor, onNext }: Props)
             <div style={{ background: '#fee2e2', color: '#b91c1c', padding: '0.6rem', borderRadius: '12px', display: 'flex' }}>
               <CalendarClock size={22} strokeWidth={2.2} />
             </div>
-            <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caFollowUpTitle')}</h2>
+            <div>
+              <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caFollowUpTitle')}</h2>
+              <div className="ca-section-subtitle" style={{ marginBottom: 0 }}>
+                {patient.name}, {patient.age} — {patient.home_facility_id}
+              </div>
+            </div>
           </div>
           <button className="ca-btn ca-btn--sm ca-btn--secondary" onClick={() => setShowForm((s) => !s)}>
             <Plus size={14} /> {t('caScheduleFollowUp')}
@@ -109,21 +114,29 @@ export default function FollowUpScreen({ patient, defaultActor, onNext }: Props)
         )}
 
         {loading ? (
-          <div className="ca-empty-state">{t('caLoading')}</div>
+          <div className="ca-empty-state ca-loading-pulse">
+            <div className="ca-spinner" style={{ margin: '0 auto 1rem' }}></div>
+            {t('caLoading')}
+          </div>
         ) : open.length === 0 ? (
           <div className="ca-empty-state">No open follow-ups for this patient.</div>
         ) : (
           <div className="ca-list">
             {open.map((f) => {
               const overdue = isOverdue(f.due_date);
+              const daysUntil = Math.ceil((new Date(f.due_date).getTime() - Date.now()) / 86400000);
               return (
-                <div key={f.follow_up_id} className={`ca-row ${overdue ? 'ca-row--overdue' : ''}`}>
+                <div key={f.follow_up_id} className={`ca-row ${overdue ? 'ca-row--overdue' : ''}`} style={{
+                  borderLeft: `4px solid ${overdue ? '#dc2626' : daysUntil <= 3 ? '#f59e0b' : '#10b981'}`,
+                }}>
                   <div className="ca-row-main">
                     <span className="ca-row-title">
+                      <span className={`ca-badge ${overdue ? 'ca-badge--emergency' : daysUntil <= 3 ? 'ca-badge--soon' : 'ca-badge--routine'}`} style={{ marginRight: 8 }}>
+                        {overdue ? t('caOverdue') : daysUntil <= 3 ? 'Due Soon' : 'Upcoming'}
+                      </span>
                       {f.risk_category} — {f.reason}
-                      {overdue && <span className="ca-badge ca-badge--emergency" style={{ marginLeft: 8 }}>{t('caOverdue')}</span>}
                     </span>
-                    <span className="ca-row-sub">{t('caDueDate')}: {f.due_date}</span>
+                    <span className="ca-row-sub">{t('caDueDate')}: {f.due_date}{!overdue && ` (±${daysUntil}d)`}</span>
                   </div>
                   <button className="ca-btn ca-btn--sm ca-btn--success" onClick={() => handleComplete(f.follow_up_id)}>
                     <Check size={14} /> {t('caMarkComplete')}
@@ -135,14 +148,14 @@ export default function FollowUpScreen({ patient, defaultActor, onNext }: Props)
         )}
 
         {error && (
-          <div role="alert" style={{ marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 600, background: 'var(--color-reject-bg)', color: 'var(--color-reject)' }}>
+          <div className="ca-alert ca-alert--error" role="alert" style={{ marginTop: '1rem' }}>
             {error}
           </div>
         )}
 
         <div className="ca-actions-row">
           <button className="ca-btn ca-btn--secondary" onClick={onNext}>
-            {t('caDashboardTitle')} <ArrowRight size={14} />
+            View Dashboard <ArrowRight size={14} />
           </button>
         </div>
       </div>

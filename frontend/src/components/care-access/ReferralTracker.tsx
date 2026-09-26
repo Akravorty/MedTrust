@@ -109,7 +109,12 @@ export default function ReferralTracker({ patient, triage, defaultActor, onRefer
           <div style={{ background: '#fef3c7', color: '#b45309', padding: '0.6rem', borderRadius: '12px', display: 'flex' }}>
             <Route size={22} strokeWidth={2.2} />
           </div>
-          <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caReferralTitle')}</h2>
+          <div>
+            <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caReferralTitle')}</h2>
+            <div className="ca-section-subtitle" style={{ marginBottom: 0 }}>
+              {patient.name}, {patient.age} — {patient.home_facility_id}
+            </div>
+          </div>
         </div>
 
         {!referral ? (
@@ -188,7 +193,7 @@ export default function ReferralTracker({ patient, triage, defaultActor, onRefer
               ))}
               {referral.status === 'ACCEPTED' && (
                 <button className="ca-btn ca-btn--sm ca-btn--success" onClick={onProceedToQueue}>
-                  {t('caNext')} <ArrowRight size={14} />
+                  Proceed to Diagnostics <ArrowRight size={14} />
                 </button>
               )}
             </div>

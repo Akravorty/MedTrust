@@ -7,7 +7,8 @@
 // it only reads whatever decision/batch data you pass into it,
 // so it's safe to drop in without touching shared/schemas.py consumers.
 
-const API_BASE = import.meta.env.VITE_API_BASE as string;
+const API_BASE: string =
+  (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:5000';
 
 interface AgentResponse {
   text: string;

@@ -74,7 +74,7 @@ function KpiBar() {
 
 function App() {
   const { t, lang } = useI18n();
-  const [mode, setMode] = useState<AppMode>('BATCH');
+  const [mode, setMode] = useState<AppMode>('CARE_ACCESS');
   const [appState, setAppState] = useState<AppState>('SCANNING');
   const [batchId, setBatchId] = useState<string | null>(null);
   const [decision, setDecision] = useState<BatchDecision | null>(null);
@@ -263,7 +263,7 @@ function App() {
           <div className="nav-brand">
             <span className="nav-logo">✚</span>
             <span className="nav-title">MediTrust</span>
-            <span className="nav-badge">Quality Gate</span>
+            <span className="nav-badge">{mode === 'BATCH' ? 'Quality Gate' : 'Care Access'}</span>
           </div>
 
           {pendingCount > 0 && mode === 'BATCH' && (

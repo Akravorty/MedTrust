@@ -79,46 +79,77 @@ export default function FacilityDashboard({ defaultFacilityId }: Props) {
       )}
 
       {data && (
-        <div className="ca-kpi-grid">
-          {KPIS.map(({ key, labelKey, icon: Icon, accent, accentBg, value }) => (
-            <div key={key} className="ca-kpi-card">
-              <div style={{ background: accentBg, color: accent, width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem' }}>
-                <Icon size={17} strokeWidth={2.2} />
-              </div>
-              <span className="ca-kpi-value" style={{ color: accent }}>{value(data)}</span>
-              <span className="ca-kpi-label">{t(labelKey)}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--color-text-secondary)' }}>
+              {t('caDailyThroughput') || 'Daily Throughput'}
+            </h3>
+            <div className="ca-kpi-grid">
+              {KPIS.slice(0, 3).map(({ key, labelKey, icon: Icon, accent, accentBg, value }) => (
+                <div key={key} className="ca-kpi-card">
+                  <div style={{ background: accentBg, color: accent, width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem' }}>
+                    <Icon size={17} strokeWidth={2.2} />
+                  </div>
+                  <span className="ca-kpi-value" style={{ color: accent }}>{value(data)}</span>
+                  <span className="ca-kpi-label">{t(labelKey)}</span>
+                </div>
+              ))}
             </div>
-          ))}
-
-          <div className="ca-kpi-card">
-            <div style={{ background: '#fef3c7', color: '#b45309', width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem' }}>
-              <Pill size={17} strokeWidth={2.2} />
-            </div>
-            <span className="ca-kpi-value" style={{ color: '#b45309' }}>
-              {data.medicine_availability.pass_rate_pct !== null ? `${data.medicine_availability.pass_rate_pct}%` : '—'}
-            </span>
-            <span className="ca-kpi-label">
-              {t('caMedicineAvailability')} · {data.medicine_availability.total_batches_tracked} tracked, {data.medicine_availability.flagged} flagged
-            </span>
           </div>
 
-          <div className="ca-kpi-card">
-            <div style={{
-              background: data.diagnostics.critical_awaiting_review > 0 ? '#fee2e2' : '#ede9fe',
-              color: data.diagnostics.critical_awaiting_review > 0 ? '#b91c1c' : '#7c3aed',
-              width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem',
-            }}>
-              <FlaskConical size={17} strokeWidth={2.2} />
+          <div>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--color-text-secondary)' }}>
+              {t('caActiveOperations') || 'Active Operations'}
+            </h3>
+            <div className="ca-kpi-grid">
+              {KPIS.slice(3).map(({ key, labelKey, icon: Icon, accent, accentBg, value }) => (
+                <div key={key} className="ca-kpi-card">
+                  <div style={{ background: accentBg, color: accent, width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem' }}>
+                    <Icon size={17} strokeWidth={2.2} />
+                  </div>
+                  <span className="ca-kpi-value" style={{ color: accent }}>{value(data)}</span>
+                  <span className="ca-kpi-label">{t(labelKey)}</span>
+                </div>
+              ))}
             </div>
-            <span className="ca-kpi-value" style={{ color: data.diagnostics.critical_awaiting_review > 0 ? '#b91c1c' : '#7c3aed' }}>
-              {data.diagnostics.pending}
-            </span>
-            <span className="ca-kpi-label">
-              {t('caDiagnosticsPending')} · {data.diagnostics.awaiting_review} {t('caDiagnosticsAwaitingReview').toLowerCase()}
-              {data.diagnostics.critical_awaiting_review > 0 && (
-                <> · <strong style={{ color: '#b91c1c' }}>{data.diagnostics.critical_awaiting_review} {t('caDiagnosticsCritical').toLowerCase()}</strong></>
-              )}
-            </span>
+          </div>
+
+          <div>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--color-text-secondary)' }}>
+              {t('caFacilityResources') || 'Facility Resources'}
+            </h3>
+            <div className="ca-kpi-grid">
+              <div className="ca-kpi-card">
+                <div style={{ background: '#fef3c7', color: '#b45309', width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem' }}>
+                  <Pill size={17} strokeWidth={2.2} />
+                </div>
+                <span className="ca-kpi-value" style={{ color: '#b45309' }}>
+                  {data.medicine_availability.pass_rate_pct !== null ? `${data.medicine_availability.pass_rate_pct}%` : '—'}
+                </span>
+                <span className="ca-kpi-label">
+                  {t('caMedicineAvailability')} · {data.medicine_availability.total_batches_tracked} tracked, {data.medicine_availability.flagged} flagged
+                </span>
+              </div>
+
+              <div className="ca-kpi-card">
+                <div style={{
+                  background: data.diagnostics.critical_awaiting_review > 0 ? '#fee2e2' : '#ede9fe',
+                  color: data.diagnostics.critical_awaiting_review > 0 ? '#b91c1c' : '#7c3aed',
+                  width: 34, height: 34, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.6rem',
+                }}>
+                  <FlaskConical size={17} strokeWidth={2.2} />
+                </div>
+                <span className="ca-kpi-value" style={{ color: data.diagnostics.critical_awaiting_review > 0 ? '#b91c1c' : '#7c3aed' }}>
+                  {data.diagnostics.pending}
+                </span>
+                <span className="ca-kpi-label">
+                  {t('caDiagnosticsPending')} · {data.diagnostics.awaiting_review} {t('caDiagnosticsAwaitingReview').toLowerCase()}
+                  {data.diagnostics.critical_awaiting_review > 0 && (
+                    <> · <strong style={{ color: '#b91c1c' }}>{data.diagnostics.critical_awaiting_review} {t('caDiagnosticsCritical').toLowerCase()}</strong></>
+                  )}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       )}

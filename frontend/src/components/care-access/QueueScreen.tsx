@@ -66,32 +66,64 @@ export default function QueueScreen({ patient, triage, defaultActor, onProceedTo
           <div style={{ background: '#d1fae5', color: '#059669', padding: '0.6rem', borderRadius: '12px', display: 'flex' }}>
             <Ticket size={22} strokeWidth={2.2} />
           </div>
-          <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caQueueTitle')}</h2>
+          <div>
+            <h2 className="ca-section-title" style={{ marginBottom: 0 }}>{t('caQueueTitle')}</h2>
+            <div className="ca-section-subtitle" style={{ marginBottom: 0 }}>
+              {patient.name}, {patient.age} — {patient.home_facility_id}
+            </div>
+          </div>
         </div>
 
         {!ticket ? (
-          <div className="ca-actions-row">
-            <button className="ca-btn ca-btn--primary" onClick={handleJoin} disabled={submitting}>
-              <Ticket size={16} />
-              {submitting ? '…' : t('caJoinQueue')}
-            </button>
+          <div style={{ marginTop: '1rem' }}>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.9rem', marginBottom: '1rem', lineHeight: 1.6 }}>
+              The patient will be added to the facility queue. A token number will be assigned and an estimated wait time shown.
+              {triage?.urgency === 'EMERGENCY' && (
+                <strong style={{ display: 'block', marginTop: '0.4rem', color: '#dc2626' }}>
+                  Emergency urgency — patient will be marked as priority.
+                </strong>
+              )}
+            </p>
+            <div className="ca-actions-row">
+              <button className="ca-btn ca-btn--primary" onClick={handleJoin} disabled={submitting}>
+                <Ticket size={16} />
+                {submitting ? 'Joining…' : t('caJoinQueue')}
+              </button>
+            </div>
           </div>
         ) : (
-          <div style={{ marginTop: '1rem' }}>
-            <div className="flex-row items-center gap-4" style={{ flexWrap: 'wrap' }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '2.4rem', fontWeight: 800, color: '#0284c7', lineHeight: 1 }}>#{ticket.token_number}</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 600 }}>{t('caTokenNumber')}</div>
+          <div style={{ marginTop: '1.25rem' }}>
+            <div className="flex-row items-center gap-4" style={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <div style={{
+                textAlign: 'center',
+                background: 'var(--bg-secondary)',
+                border: '3px solid #0284c7',
+                borderRadius: '16px',
+                padding: '1rem 1.5rem',
+                minWidth: '100px',
+              }}>
+                <div style={{ fontSize: '3rem', fontWeight: 900, color: '#0284c7', lineHeight: 1, letterSpacing: '-2px' }}>
+                  #{ticket.token_number}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--color-text-secondary)', fontWeight: 700, marginTop: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Token
+                </div>
               </div>
-              <span className={`ca-badge ${ticket.priority ? 'ca-badge--emergency' : 'ca-badge--info'}`}>{ticket.status}</span>
-              {ticket.est_wait_minutes !== null && (
-                <span className="ca-badge ca-badge--neutral"><Clock size={13} style={{ marginRight: 4 }} />~{ticket.est_wait_minutes} min</span>
-              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <span className={`ca-badge ${ticket.priority ? 'ca-badge--emergency' : 'ca-badge--info'}`} style={{ width: 'fit-content' }}>
+                  {ticket.priority && '⚡ '}{ticket.status.replace('_', ' ')}
+                </span>
+                {ticket.est_wait_minutes !== null && (
+                  <span className="ca-badge ca-badge--neutral" style={{ width: 'fit-content' }}>
+                    <Clock size={13} style={{ marginRight: 4 }} />~{ticket.est_wait_minutes} min wait
+                  </span>
+                )}
+              </div>
             </div>
             {ticket.status === 'IN_CONSULT' && (
-              <div className="ca-actions-row">
+              <div className="ca-actions-row" style={{ marginTop: '1.25rem' }}>
                 <button className="ca-btn ca-btn--success" onClick={onProceedToTeleconsult}>
-                  {t('caNext')} <ArrowRight size={14} />
+                  Proceed to Teleconsultation <ArrowRight size={14} />
                 </button>
               </div>
             )}
@@ -99,7 +131,7 @@ export default function QueueScreen({ patient, triage, defaultActor, onProceedTo
         )}
 
         {error && (
-          <div role="alert" style={{ marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 600, background: 'var(--color-reject-bg)', color: 'var(--color-reject)' }}>
+          <div className="ca-alert ca-alert--error" role="alert" style={{ marginTop: '1rem' }}>
             {error}
           </div>
         )}
