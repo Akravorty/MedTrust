@@ -174,6 +174,9 @@ const EN = {
   caNext: 'Next',
   caOfflineQueuedAction: 'You are offline. This will be sent when you reconnect.',
   caLoading: 'Loading…',
+  caDailyThroughput: 'Daily Throughput',
+  caActiveOperations: 'Active Operations',
+  caFacilityResources: 'Facility Resources',
 } as const;
 
 export type Key = keyof typeof EN;
@@ -297,6 +300,9 @@ const STRINGS: Partial<Record<LangCode, Partial<Dict>>> = {
     caNext: 'आगे',
     caOfflineQueuedAction: 'आप ऑफ़लाइन हैं। नेटवर्क आने पर यह भेजा जाएगा।',
     caLoading: 'लोड हो रहा है…',
+    caDailyThroughput: 'दैनिक थ्रूपुट',
+    caActiveOperations: 'सक्रिय संचालन',
+    caFacilityResources: 'सुविधा संसाधन',
   },
   mr: {
     scanTitle: 'औषधाचा बॅच स्कॅन करा',
