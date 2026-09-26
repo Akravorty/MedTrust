@@ -363,7 +363,7 @@ function App() {
 
         {mode === 'BATCH' && appState === 'DECISION' && decision && (
           <div className="flex-row gap-6" style={{ alignItems: 'flex-start' }}>
-            <div className="flex-col gap-6" style={{ flex: 2 }}>
+            <div className="flex-col gap-6" style={{ flex: 1, minWidth: 0 }}>
               {alerts.length > 0 && (
                 <div className="card" role="status" style={{ borderLeft: '4px solid #ef4444' }}>
                   <strong>Alert sent to {alerts[0].recipient}</strong>
