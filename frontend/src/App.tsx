@@ -107,6 +107,22 @@ function App() {
     }
   }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Browsers restore the previous scroll position on reload for the
+  // same URL (history.scrollRestoration defaults to 'auto'). Since this is
+  // a single-page app, navigating between scan/decision/recall doesn't
+  // change the URL, so a fresh decision view could otherwise open already
+  // scrolled to wherever the user last was. Force scroll-to-top whenever
+  // we land on a new appState, and disable browser auto-restoration.
+  useEffect(() => {
+    if ('scrollRestoration' in window.history) {
+      window.history.scrollRestoration = 'manual';
+    }
+  }, []);
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [appState]);
+
   // On mount: show any scans already queued from a previous offline session.
   // On reconnect: replay them (each carrying its own Idempotency-Key so a
   // replay that the server already saw doesn't create a duplicate decision

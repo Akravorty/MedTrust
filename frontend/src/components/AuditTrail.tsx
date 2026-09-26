@@ -20,7 +20,7 @@ export default function AuditTrail({ batchId }: { batchId: string }) {
   };
 
   return (
-    <div className="card">
+    <div className="card" style={{ overflowX: 'hidden' }}>
       <div className="flex-row justify-between items-center" style={{ marginBottom: '1.5rem' }}>
         <h3>Ledger Audit Trail</h3>
         {!verified ? (
@@ -36,7 +36,7 @@ export default function AuditTrail({ batchId }: { batchId: string }) {
         )}
       </div>
 
-      <div className="flex-row gap-4" style={{ overflowX: 'auto', paddingBottom: '1rem' }}>
+      <div className="flex-row gap-4" style={{ overflowX: 'auto', paddingBottom: '1rem', paddingRight: '260px' }}>
         {events.map((evt, idx) => (
           <div key={evt.id} className="flex-row items-center gap-4">
             <div className="flex-col" style={{ padding: '1rem', backgroundColor: 'var(--color-bg-primary)', borderRadius: '8px', minWidth: '150px' }}>
