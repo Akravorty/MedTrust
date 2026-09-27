@@ -168,11 +168,12 @@ export const getTrace = async (batchId: string): Promise<TraceEvent[]> => {
 
   const data = await res.json();
 
-  return data.events.map((e: { event_id: string; timestamp: string; actor: string; action: string }) => ({
+  return data.events.map((e: { event_id: string; timestamp: string; actor: string; action: string; decision: string | null }) => ({
     id: e.event_id,
     timestamp: e.timestamp,
     location: e.actor,          // the ledger tracks actors, not physical locations
     action: e.action,
+    decision: e.decision,
     verified: data.chain_valid,
   }));
 };

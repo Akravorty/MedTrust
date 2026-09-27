@@ -31,6 +31,7 @@ export interface TraceEvent {
   timestamp: string;
   location: string;
   action: string;
+  decision: string | null;
   verified: boolean;
 }
 

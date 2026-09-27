@@ -3,13 +3,35 @@ import { TraceEvent } from '../types/schema';
 import { getTrace, verifyChain } from '../services/api';
 import { ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
 
+// Collapses consecutive events that represent the same real decision
+// logged more than once (e.g. re-evaluating a batch several times during
+// a demo/rehearsal re-fires RISK_DECISION_RECORDED each time). Keeps the
+// LATEST occurrence of each run, so the audit trail still shows the most
+// recent decision, and only merges entries that are truly identical in
+// both action and decision -- a genuine HOLD -> ACCEPT flip is never
+// collapsed, since the decision values differ.
+function dedupeConsecutive(events: TraceEvent[]): TraceEvent[] {
+  const result: TraceEvent[] = [];
+  for (const evt of events) {
+    const prev = result[result.length - 1];
+    if (prev && prev.action === evt.action && prev.decision === evt.decision) {
+      result[result.length - 1] = evt; // replace with the later occurrence
+    } else {
+      result.push(evt);
+    }
+  }
+  return result;
+}
+
 export default function AuditTrail({ batchId }: { batchId: string }) {
   const [events, setEvents] = useState<TraceEvent[]>([]);
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState(false);
 
   useEffect(() => {
-    getTrace(batchId).then(setEvents).catch(() => setEvents([]));
+    getTrace(batchId)
+      .then((fetched) => setEvents(dedupeConsecutive(fetched)))
+      .catch(() => setEvents([]));
   }, [batchId]);
 
   const handleVerify = async () => {
