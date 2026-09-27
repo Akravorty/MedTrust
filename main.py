@@ -6,6 +6,7 @@ and Section 3 (API contract: Intake, Risk Engine, Ledger, Agents).
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from shared.database import init_db, get_connection
 from services.risk_engine.router import router as risk_router
 from services.ledger.router import router as ledger_router
@@ -86,3 +87,18 @@ app.include_router(fhir_router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# Serve the built React frontend from the same origin as the API, so a
+# single deployed URL (e.g. Render) serves both. Mounted LAST and at "/"
+# so it acts as a fallback -- every API route above is matched first;
+# only requests that don't match any API route fall through to here,
+# where html=True makes unmatched paths (client-side React routes) also
+# resolve to index.html instead of a 404, which SPA routing needs.
+#
+# frontend/dist is produced by `npm run build` in the frontend/ folder;
+# it must exist at deploy time (Render's build step should run that
+# build before starting this app) or this mount will fail to find it.
+_frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+if os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
