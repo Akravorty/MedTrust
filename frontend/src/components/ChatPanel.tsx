@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { askAgent } from '../services/api';
 import { Send, Bot, FileText } from 'lucide-react';
 import { QAResponse } from '../types/schema';
+import { useI18n } from '../i18n';
 
 interface Message {
   id: string;
@@ -36,6 +37,7 @@ function MarkdownText({ text }: { text: string }) {
 function mkId() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
 export default function ChatPanel({ batchData }: { batchData: import('../types/schema').BatchDecision }) {
+  const { lang } = useI18n();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: mkId(),
@@ -48,7 +50,12 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to latest message
+  const isFirstRender = useRef(true);
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
@@ -66,7 +73,7 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
     try {
       // Pass full history so askAgent can resolve follow-up context
       const history = [...messages, userMsg].map(m => ({ role: m.role, text: m.text }));
-      const res = await askAgent(batchData, q, history);
+      const res = await askAgent(batchData, q, history, lang);
       setMessages(prev => [
         ...prev,
         { id: mkId(), role: 'agent', text: res.answer, responseMeta: res },
@@ -82,7 +89,7 @@ export default function ChatPanel({ batchData }: { batchData: import('../types/s
   };
 
   return (
-    <div className="card chat-panel-card flex-col" style={{ height: '580px', padding: 0, overflow: 'hidden' }}>
+    <div className="card chat-panel-card flex-col" style={{ height: '100%', padding: 0, overflow: 'hidden' }}>
 
       {/* Header */}
       <div className="chat-header">

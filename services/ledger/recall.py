@@ -66,6 +66,18 @@ def _extract_distribution_events(events: list[sqlite3.Row]) -> list[dict]:
                 "sequence": payload.get("sequence"),
             }
         )
+    # De-dupe by location, keeping the LAST-logged event for each one.
+    # Repeated seed runs under different idempotency-key schemes (see the
+    # module docstring) leave old and new rows for the same physical stop
+    # both present in the ledger -- a real batch passes through a given
+    # location once, not once per reseed. Keeping the most recent row per
+    # location also naturally prefers the richer v2 payload (recipient +
+    # facility_id) over an older, thinner one.
+    deduped: dict[str, dict] = {}
+    for r in records:
+        deduped[r["location"]] = r
+    records = list(deduped.values())
+
     records.sort(key=lambda r: (r["sequence"] is None, r["sequence"]))
     return records
 

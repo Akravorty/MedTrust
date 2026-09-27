@@ -220,7 +220,33 @@ def _mock_batches() -> Dict[str, Batch]:
         status=BatchStatus.ACCEPTED,
     )
 
-    return {b.batch_id: b for b in (hold_batch, accept_batch)}
+    reject_received = _now() - timedelta(hours=8)
+    reject_batch = Batch(
+        batch_id="DEMO-REJECT",
+        medicine_name="Ciprofloxacin 500mg",
+        batch_number="CIP-2026-0301",
+        supplier_id="SUP-001",
+        qr_payload="MEDITRUST|CIP-2026-0301|SUP-001|2026-03-01",
+        ocr_extracted_text={
+            "raw_text": "CIPROFLOXACIN 500MG BATCH CIP-2026-0301 MFG 2025-06-01 EXP 2026-01-01",
+            "medicine_name": "Ciprofloxacin 500mg",
+            "batch_number": "CIP-2026-0301",
+            "manufacture_date": "2025-06-01",
+            "expiry_date": "2026-01-01",
+        },
+        ocr_qr_match_score=0.91,
+        manufacture_date=datetime(2025, 6, 1, tzinfo=timezone.utc),
+        expiry_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        received_timestamp=reject_received,
+        storage_temp_log=[
+            TempLogEntry(timestamp=reject_received, temp_c=15.2),
+            TempLogEntry(timestamp=reject_received + timedelta(hours=1), temp_c=18.6),
+        ],
+        physical_inspection_notes="Batch expired at time of intake; packaging shows moisture damage.",
+        status=BatchStatus.REJECTED,
+    )
+
+    return {b.batch_id: b for b in (hold_batch, accept_batch, reject_batch)}
 
 
 def _mock_decisions() -> Dict[str, RiskDecision]:
@@ -282,7 +308,34 @@ def _mock_decisions() -> Dict[str, RiskDecision]:
         model_version="risk-engine-v1.3.2",
     )
 
-    return {d.batch_id: d for d in (hold_decision, accept_decision)}
+    reject_decision = RiskDecision(
+        batch_id="DEMO-REJECT",
+        risk_score=0.95,
+        decision="REJECT",
+        triggered_rule="EXPIRED_ON_INTAKE",
+        shap_contributors=[
+            {
+                "feature": "expiry_date.days_past_expiry",
+                "display_label": "Batch expired before intake",
+                "contribution": 0.68,
+                "direction": "increases_risk",
+            },
+            {
+                "feature": "physical_inspection.damage_flag",
+                "display_label": "Moisture damage noted on inspection",
+                "contribution": 0.20,
+                "direction": "increases_risk",
+            },
+        ],
+        reasons=[
+            "Batch expiry date is in the past relative to intake date.",
+            "Physical inspection noted moisture damage to packaging.",
+        ],
+        decided_at=_now() - timedelta(hours=7, minutes=50),
+        model_version="risk-engine-v1.3.2",
+    )
+
+    return {d.batch_id: d for d in (hold_decision, accept_decision, reject_decision)}
 
 
 def _mock_traces() -> Dict[str, List[Dict[str, Any]]]:
@@ -331,7 +384,21 @@ def _mock_traces() -> Dict[str, List[Dict[str, Any]]]:
         accept_events.append(evt)
         prev = evt["this_hash"]
 
-    return {"DEMO-HOLD": hold_events, "DEMO-ACCEPT": accept_events}
+    reject_events = []
+    prev = "sha256:genesis"
+    for i, (actor, action) in enumerate(
+        [
+            ("intake-service", "BATCH_RECEIVED"),
+            ("ocr-service", "QR_OCR_MATCHED"),
+            ("risk-engine", "DECISION_REJECT_ISSUED"),
+        ],
+        start=1,
+    ):
+        evt = _event("DEMO-REJECT", i, actor, action, prev)
+        reject_events.append(evt)
+        prev = evt["this_hash"]
+
+    return {"DEMO-HOLD": hold_events, "DEMO-ACCEPT": accept_events, "DEMO-REJECT": reject_events}
 
 
 def _mock_suppliers() -> Dict[str, Supplier]:
@@ -491,3 +558,5 @@ def execute_tool(name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         validated = input_model.model_validate(tool_input)
     except ValidationError as exc:
         return {"error": f"Invalid input for tool '{name}': {exc.errors()}"}
+
+    return func(**validated.model_dump())

@@ -3,12 +3,12 @@ tests/test_supplier_agent.py
 
 Unit tests for services/agents/supplier_agent.py.
 
-No real network or Gemini API calls are made: `supplier_agent._build_client`
+No real network or Groq API calls are made: `supplier_agent._build_client`
 and `supplier_agent.execute_tool` are monkeypatched with fakes, following the
-same pattern as tests/test_qa_agent.py. `client.models.generate_content(...)`
-is faked to return an object with a `.text` attribute holding the JSON string
-that `_call_structured_gemini` expects to `json.loads(...)` — matching the
-google-genai structured-output response shape, not Anthropic tool_use blocks.
+same pattern as tests/test_qa_agent.py. `client.chat.completions.create(...)`
+is faked to return a chat-completion-shaped object whose
+`choices[0].message.content` holds the JSON string that `_call_structured_llm`
+expects to `json.loads(...)` (Groq JSON mode).
 
 Several tests assert that the LLM is NOT invoked at all when the threshold
 rule engine short-circuits — that's the core cost/latency guarantee this
@@ -22,7 +22,8 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
-from google.genai.errors import APIError
+import httpx
+from groq import APIStatusError
 
 from services.agents import supplier_agent
 from shared.schemas import SupplierAlert
@@ -32,36 +33,40 @@ from shared.schemas import SupplierAlert
 # Test helpers
 # --------------------------------------------------------------------------- #
 
+def _completion(content: Optional[str]) -> SimpleNamespace:
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))])
+
+
 def _analysis_response(
     trend_description: str,
     severity: str,
     suggested_action: str,
     draft_escalation_message: str,
 ) -> SimpleNamespace:
-    """Mimics the google-genai response for a structured AlertAnalysisResponse call."""
+    """Mimics a Groq JSON-mode chat completion for an AlertAnalysisResponse call."""
     payload = {
         "trend_description": trend_description,
         "severity": severity,
         "suggested_action": suggested_action,
         "draft_escalation_message": draft_escalation_message,
     }
-    return SimpleNamespace(text=json.dumps(payload))
+    return _completion(json.dumps(payload))
 
 
 def _translation_response(translated_text: str) -> SimpleNamespace:
-    """Mimics the google-genai response for a structured TranslationResponse call."""
-    return SimpleNamespace(text=json.dumps({"translated_text": translated_text}))
+    """Mimics a Groq JSON-mode chat completion for a TranslationResponse call."""
+    return _completion(json.dumps({"translated_text": translated_text}))
 
 
-class _FakeModels:
+class _FakeCompletions:
     def __init__(self, responses: List[Any]) -> None:
         self._responses = list(responses)
         self.calls: List[Dict[str, Any]] = []
 
-    def generate_content(self, **kwargs: Any) -> Any:
+    def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         if not self._responses:
-            raise AssertionError("_FakeModels.generate_content called more times than responses were queued.")
+            raise AssertionError("_FakeCompletions.create called more times than responses were queued.")
         next_item = self._responses.pop(0)
         if isinstance(next_item, BaseException):
             raise next_item
@@ -70,12 +75,12 @@ class _FakeModels:
 
 class _FakeClient:
     def __init__(self, responses: List[Any]) -> None:
-        self.models = _FakeModels(responses)
+        self.chat = SimpleNamespace(completions=_FakeCompletions(responses))
 
 
 @pytest.fixture(autouse=True)
 def _api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-used")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key-not-used")
 
 
 def _patch_client(monkeypatch: pytest.MonkeyPatch, responses: List[Any]) -> _FakeClient:
@@ -93,8 +98,10 @@ def _forbid_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(supplier_agent, "_build_client", _raise)
 
 
-def _make_api_error(code: int, message: str) -> APIError:
-    return APIError(code, {"error": {"message": message, "status": "ERROR"}})
+def _make_api_error(code: int, message: str) -> APIStatusError:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(code, request=request)
+    return APIStatusError(message, response=response, body={"error": {"message": message}})
 
 
 def _supplier_payload(
@@ -200,11 +207,15 @@ def test_degradation_invokes_llm_and_returns_alert(monkeypatch: pytest.MonkeyPat
     assert result.severity == "HIGH"
     assert result.supplier_id == "SUP-001"
     assert result.draft_escalation_message == "Please review SUP-001's rising reject rate."
-    assert len(fake_client.models.calls) == 1
+    assert len(fake_client.chat.completions.calls) == 1
 
-    call_kwargs = fake_client.models.calls[0]
-    assert call_kwargs["config"].response_schema is supplier_agent.AlertAnalysisResponse
-    assert call_kwargs["config"].system_instruction == supplier_agent.ANALYSIS_SYSTEM_PROMPT
+    call_kwargs = fake_client.chat.completions.calls[0]
+    assert call_kwargs["response_format"] == {"type": "json_object"}
+    system_message = call_kwargs["messages"][0]
+    assert system_message["role"] == "system"
+    assert system_message["content"].startswith(supplier_agent.ANALYSIS_SYSTEM_PROMPT)
+    # The response model's schema is handed to the model in the prompt.
+    assert "draft_escalation_message" in system_message["content"]
 
 
 def test_invalid_severity_from_llm_defaults_to_medium(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,11 +259,11 @@ def test_lang_hi_translates_draft_escalation_message(monkeypatch: pytest.MonkeyP
 
     result = supplier_agent.run_supplier_agent("SUP-001", lang="hi")
 
-    assert len(fake_client.models.calls) == 2
-    translation_call = fake_client.models.calls[1]
-    assert "Hindi" in translation_call["config"].system_instruction
+    assert len(fake_client.chat.completions.calls) == 2
+    translation_call = fake_client.chat.completions.calls[1]
+    assert "Hindi" in translation_call["messages"][0]["content"]
     # The English draft is what gets sent to the translator.
-    assert translation_call["contents"] == "Please review SUP-001's rising reject rate."
+    assert translation_call["messages"][1]["content"] == "Please review SUP-001's rising reject rate."
     # The final alert carries the translated text, not the English original.
     assert result.draft_escalation_message == "कृपया SUP-001 की बढ़ती अस्वीकृति दर की समीक्षा करें।"
 
@@ -274,8 +285,8 @@ def test_lang_or_uses_odia_in_translation_system_prompt(monkeypatch: pytest.Monk
 
     result = supplier_agent.run_supplier_agent("SUP-001", lang="or")
 
-    translation_call = fake_client.models.calls[1]
-    assert "Odia" in translation_call["config"].system_instruction
+    translation_call = fake_client.chat.completions.calls[1]
+    assert "Odia" in translation_call["messages"][0]["content"]
     assert result.draft_escalation_message == "translated-odia-text"
 
 
@@ -326,7 +337,7 @@ def test_unsupported_lang_raises_before_any_lookup(monkeypatch: pytest.MonkeyPat
 
 
 # --------------------------------------------------------------------------- #
-# Gemini SDK error -> AgentUnavailableError mapping
+# Groq SDK error -> AgentUnavailableError mapping
 # --------------------------------------------------------------------------- #
 
 def test_api_error_during_analysis_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -340,7 +351,7 @@ def test_api_error_during_analysis_maps_to_agent_unavailable(monkeypatch: pytest
 
     with pytest.raises(supplier_agent.AgentUnavailableError) as excinfo:
         supplier_agent.run_supplier_agent("SUP-001")
-    assert "Gemini API error" in str(excinfo.value.reason)
+    assert "Groq API error" in str(excinfo.value.reason)
 
 
 def test_unexpected_exception_during_analysis_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,7 +369,7 @@ def test_unexpected_exception_during_analysis_maps_to_agent_unavailable(monkeypa
 
 
 def test_missing_api_key_raises_agent_unavailable_when_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setattr(
         supplier_agent,
         "execute_tool",
@@ -372,9 +383,9 @@ def test_missing_api_key_raises_agent_unavailable_when_degraded(monkeypatch: pyt
 # NOTE: The original test file also had
 # `test_forced_tool_call_without_matching_block_raises_agent_unavailable`,
 # exercising a `supplier_agent._call_forced_tool` helper — that function
-# doesn't exist in supplier_agent.py. The Gemini implementation enforces a
-# single structured JSON response via `response_schema=` on the request
-# config rather than a forced-tool-choice retry loop, so there is no
+# doesn't exist in supplier_agent.py. The Groq implementation asks for a
+# single JSON object via `response_format={"type": "json_object"}` rather
+# than a forced-tool-choice retry loop, so there is no
 # equivalent "forced tool call with no matching block" failure mode to test
 # here. Dropped rather than faked back into existence; see the same note in
 # test_qa_agent.py for the analogous `_find_tool_use` case.
@@ -383,6 +394,31 @@ def test_missing_api_key_raises_agent_unavailable_when_degraded(monkeypatch: pyt
 # --------------------------------------------------------------------------- #
 # Pure helper functions
 # --------------------------------------------------------------------------- #
+
+def test_empty_llm_content_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        supplier_agent,
+        "execute_tool",
+        lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
+    )
+    _patch_client(monkeypatch, [_completion(None)])
+
+    with pytest.raises(supplier_agent.AgentUnavailableError) as excinfo:
+        supplier_agent.run_supplier_agent("SUP-001")
+    assert "empty response" in str(excinfo.value.reason)
+
+
+def test_non_object_json_maps_to_agent_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        supplier_agent,
+        "execute_tool",
+        lambda name, tool_input: _supplier_payload(reject_rate_3mo=0.20, reject_rate_6mo=0.05),
+    )
+    _patch_client(monkeypatch, [_completion("[1, 2, 3]")])
+
+    with pytest.raises(supplier_agent.AgentUnavailableError):
+        supplier_agent.run_supplier_agent("SUP-001")
+
 
 def test_compute_degradation() -> None:
     assert supplier_agent._compute_degradation(0.20, 0.05) == pytest.approx(0.15)

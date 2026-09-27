@@ -10,3 +10,5 @@ frontend/.env
 .pytest_cache/
 venv/
 .venv/
+.vercel
+.vercel/

@@ -12,6 +12,7 @@ maps to one of the master doc's named errors (Section 5) via HTTPException
 with a clean `detail` string.
 """
 
+import json
 import sqlite3
 from datetime import datetime
 
@@ -96,6 +97,19 @@ def get_trace_endpoint(batch_id: str, db: sqlite3.Connection = Depends(_db_depen
     except TraceUnavailableError:
         raise HTTPException(status_code=500, detail="Trace unavailable")
 
+    def _decision_summary(e) -> str | None:
+        # Only RISK_DECISION_RECORDED payloads carry a decision worth
+        # surfacing to the audit trail UI; every other action (recall
+        # simulation, distribution seeding, etc.) gets None rather than
+        # a misleading or empty label.
+        if e["action"] != "RISK_DECISION_RECORDED":
+            return None
+        try:
+            payload = json.loads(e["payload"])
+        except (ValueError, TypeError):
+            return None
+        return payload.get("decision")
+
     return {
         "batch_id": batch_id,
         "events": [
@@ -103,6 +117,7 @@ def get_trace_endpoint(batch_id: str, db: sqlite3.Connection = Depends(_db_depen
                 "event_id": e["event_id"],
                 "actor": e["actor"],
                 "action": e["action"],
+                "decision": _decision_summary(e),
                 "payload_hash": e["payload_hash"],
                 "prev_hash": e["prev_hash"],
                 "this_hash": e["this_hash"],
