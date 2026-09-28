@@ -360,3 +360,93 @@ def finalize_batch(
     )
     logger.info("batch_finalized batch_id=%s", batch_id)
     return batch, False
+
+
+# ------------------------------------------------- direct code scan --
+
+# Demo lookup: the QR carries only GTIN + batch, not the medicine name.
+_GTIN_NAMES = {
+    "08904243900085": "Calpol",
+}
+
+
+class InvalidCodeIntakeError(Exception):
+    """The scanned text has no usable batch number."""
+
+
+def scan_code_batch(
+    conn: sqlite3.Connection,
+    *,
+    code: str,
+    supplier_id_hint: str | None,
+    temperature_csv: str | None,
+    physical_inspection_notes: str | None,
+    medicine_name_hint: str | None = None,
+) -> tuple[Batch, dict]:
+    """
+    Registers a batch from already-decoded QR text (live camera scan),
+    with no image. The QR was machine-decoded, so its batch number is
+    trusted evidence; the Risk Engine still makes the ACCEPT/HOLD/REJECT
+    call. Repeat scans of the same code reuse the existing batch.
+    """
+    import re as _re
+    from services.intake.qr import parse_qr_payload
+
+    raw = (code or "").strip()
+    if not raw:
+        raise InvalidCodeIntakeError()
+    logger.info("code_scan_started")
+
+    parsed = parse_qr_payload(raw) or {}
+    # A bare token like "EA2546" is accepted as a batch number.
+    if not parsed.get("batch_number") and _re.fullmatch(r"[A-Za-z0-9._-]{3,40}", raw):
+        parsed = {"batch_number": raw}
+    if not parsed.get("batch_number"):
+        raise InvalidCodeIntakeError()
+
+    fingerprint = compute_fingerprint(("code:" + raw).encode("utf-8"))
+    existing_row = storage.find_batch_by_fingerprint(conn, fingerprint)
+    if existing_row is not None:
+        logger.info("duplicate_detected batch_id=%s", existing_row["batch_id"])
+        return storage.get_batch(conn, existing_row["batch_id"]), {"duplicate": True, "reused_batch_id": existing_row["batch_id"]}
+
+    gtin_match = _re.search(r"/01/(\d{14})|\(01\)(\d{14})|^01(\d{14})", raw)
+    gtin = next((g for g in (gtin_match.groups() if gtin_match else ()) if g), None)
+
+    batch_number = normalize_batch_number(parsed.get("batch_number"))
+    medicine_name = (
+        normalize_medicine_name(medicine_name_hint) if medicine_name_hint else None
+    ) or _GTIN_NAMES.get(gtin or "") or normalize_medicine_name(parsed.get("medicine_name")) or "UNKNOWN"
+    expiry_date = normalize_date(parsed["expiry_date"]) if parsed.get("expiry_date") else None
+    manufacture_date = normalize_date(parsed["manufacture_date"]) if parsed.get("manufacture_date") else None
+    supplier_id = supplier_id_hint or parsed.get("supplier_id") or "UNKNOWN"
+
+    temp_result = validate_temperature_csv(temperature_csv)
+
+    batch = Batch(
+        batch_id=str(uuid.uuid4()),
+        medicine_name=medicine_name,
+        batch_number=batch_number or parsed["batch_number"],
+        supplier_id=supplier_id,
+        qr_payload=raw,
+        ocr_extracted_text={"raw_text": "", "fields": {}, "source": "direct_code_scan", "gtin": gtin},
+        ocr_qr_match_score=None,
+        manufacture_date=manufacture_date,
+        expiry_date=expiry_date,
+        received_timestamp=datetime.now(timezone.utc),
+        storage_temp_log=temp_result.valid_entries,
+        physical_inspection_notes=physical_inspection_notes,
+        status=BatchStatus.PENDING,
+    )
+
+    storage.insert_batch(conn, batch, manual_review_reasons=[], image_fingerprint=fingerprint)
+    logger.info("batch_created batch_id=%s status=%s source=code", batch.batch_id, batch.status.value)
+
+    ledger_ok = send_ledger_event(
+        conn,
+        batch_id=batch.batch_id,
+        actor="intake_service",
+        action="BATCH_CREATED",
+        payload={"status": batch.status.value, "source": "direct_code_scan"},
+    )
+    return batch, {"source": "direct_code_scan", "gtin": gtin, "ledger_event_sent": ledger_ok}

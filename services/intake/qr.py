@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import parse_qsl, unquote, urlparse
 from datetime import date
 
 import numpy as np
@@ -140,7 +141,7 @@ def parse_qr_payload(raw: str) -> dict:
     if not raw:
         return {}
 
-    for parser in (_try_parse_json, _try_parse_kv_pairs, _try_parse_gs1):
+    for parser in (_try_parse_json, _try_parse_gs1_url, _try_parse_kv_pairs, _try_parse_gs1):
         result = parser(raw)
         if result:
             return result
@@ -269,4 +270,48 @@ def _try_parse_gs1(raw: str) -> dict:
             # rest of the payload.
             break
 
+    return result
+
+
+def _try_parse_gs1_url(raw: str) -> dict:
+    """
+    Parses GS1 Digital Link URLs, the format printed on real Indian packs, e.g.
+        https://verifygkkev.com/api/01/08904243900085/10/EA2546
+    The path is a series of AI/value pairs (01=GTIN, 10=batch, 17=expiry,
+    11=manufacture date); AIs may also appear as query parameters.
+    Returns {} unless a batch number (AI 10) is present, so it never
+    claims a URL that isn't a GS1 link.
+    """
+    if not raw.lower().startswith(("http://", "https://")):
+        return {}
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return {}
+
+    wanted = {"01", "10", "11", "17", "21"}
+    pairs: dict = {}
+    segments = [unquote(s) for s in parsed.path.split("/") if s]
+    i = 0
+    while i < len(segments) - 1:
+        if segments[i] in wanted and segments[i + 1]:
+            pairs.setdefault(segments[i], segments[i + 1])
+            i += 2
+        else:
+            i += 1
+    for key, value in parse_qsl(parsed.query):
+        if key in wanted and value:
+            pairs.setdefault(key, value)
+
+    batch = pairs.get(_GS1_AI_BATCH, "").strip()
+    if not batch:
+        return {}
+
+    result: dict = {"batch_number": batch}
+    expiry = _gs1_date_to_iso(pairs.get(_GS1_AI_EXPIRY, ""))
+    if expiry:
+        result["expiry_date"] = expiry
+    mfg = _gs1_date_to_iso(pairs.get(_GS1_AI_MFG_DATE, ""))
+    if mfg:
+        result["manufacture_date"] = mfg
     return result

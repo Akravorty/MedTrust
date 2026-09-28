@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, Wifi, CheckCircle2, ImagePlus, Loader2 } from 'lucide-react';
 import { BrowserMultiFormatReader, Result } from '@zxing/library';
-import { scanPack } from '../services/api';
+import { scanPack, scanCode } from '../services/api';
 import { useI18n } from '../i18n';
 
 interface Props {
@@ -149,17 +149,41 @@ export default function ScanIntake({ onScanComplete }: Props) {
   }, []);
 
   /* ─── barcode detected ─── */
+  const registerScannedCode = useCallback(async (raw: string) => {
+    isProcessingRef.current = true;
+    setScanning(true);
+    setPackError(null);
+    try {
+      const result = await scanCode(raw);
+      setScanning(false);
+      setDone(true);
+      setTimeout(() => {
+        setDone(false);
+        isProcessingRef.current = false;
+        onScanComplete(result.batch_id);
+      }, VERIFY_PHASE_MS);
+    } catch (err) {
+      setScanning(false);
+      isProcessingRef.current = false;
+      setPackError(err instanceof Error ? err.message : 'Could not register this code.');
+      inputRef.current?.focus();
+    }
+  }, [onScanComplete]);
+
   const onBarcodeDetected = useCallback((raw: string) => {
     if (isProcessingRef.current || !raw) return;
-    const clean = raw.startsWith('http') ? (raw.split('/').pop() ?? raw) : raw;
+    const gs1Batch = raw.match(/\/10\/([^/?#]+)/);
+    const clean = gs1Batch
+      ? decodeURIComponent(gs1Batch[1])
+      : raw.startsWith('http') ? (raw.split('/').pop() ?? raw) : raw;
     playBeep();
     setFlashEffect(true);
     setTimeout(() => setFlashEffect(false), 500);
     setDetectedCode(clean);
     setBatchInput(clean);
     stopWebcam();
-    inputRef.current?.focus(); // human confirms; camera misreads no longer auto-submit
-  }, [stopWebcam]);
+    void registerScannedCode(raw); // register straight from the scan, no photo
+  }, [stopWebcam, registerScannedCode]);
 
   /* ─── start webcam ─── */
   const startWebcam = async () => {
@@ -210,8 +234,8 @@ export default function ScanIntake({ onScanComplete }: Props) {
       /* Strategy 2 – ZXing BrowserMultiFormatReader */
       if (!codeReaderRef.current) codeReaderRef.current = new BrowserMultiFormatReader();
       if (videoRef.current) {
-        codeReaderRef.current.decodeFromVideoDevice(
-          null,
+        codeReaderRef.current.decodeFromStream(
+          stream,
           videoRef.current,
           (result: Result | null) => {
             if (result && !isProcessingRef.current) onBarcodeDetected(result.getText());
@@ -220,8 +244,10 @@ export default function ScanIntake({ onScanComplete }: Props) {
       }
     } catch (err) {
       console.error('[Scanner] Camera init error:', err);
-      alert('Unable to access webcam. Please check browser permissions.');
-      setIsWebcamActive(false);
+      const name = (err as { name?: string }).name ?? 'Error';
+      const detail = err instanceof Error ? err.message : '';
+      stopWebcam();
+      setScanTimeoutMsg(`Camera error (${name}): ${detail}`);
     }
   };
 
@@ -348,8 +374,8 @@ export default function ScanIntake({ onScanComplete }: Props) {
           {packUploading ? t('checking') : t('packPhoto')}
         </button>
         <p style={{ fontSize: '0.78rem', opacity: 0.65, margin: '0.4rem 0 0' }}>
-          First time scanning this medicine? A batch ID only works once a pack has been
-          registered — photograph the pack instead and it will be read automatically.
+          New medicine? Scanning its QR registers it automatically. If the pack has no QR, a typed batch ID only works for packs that are already
+          registered, so photograph the pack instead.
         </p>
         {packError && (
           <p role="alert" style={{ color: '#991b1b', background: '#fee2e2', borderRadius: '8px', padding: '0.5rem 0.75rem', marginTop: '0.5rem', fontSize: '0.85rem' }}>

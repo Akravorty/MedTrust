@@ -29,6 +29,8 @@ from services.intake.service import (
     finalize_batch,
     get_batch_or_raise,
     scan_batch,
+    scan_code_batch,
+    InvalidCodeIntakeError,
 )
 
 router = APIRouter(prefix="/intake", tags=["intake"])
@@ -90,6 +92,31 @@ async def post_scan(
     if batch.status.value == "MANUAL_REVIEW":
         response["manual_review_reasons"] = diagnostics.get("manual_review_reasons", [])
     return response
+
+
+class ScanCodeRequest(BaseModel):
+    code: str
+    supplier_id: str | None = None
+    temperature_csv: str | None = None
+    physical_inspection_notes: str | None = None
+    medicine_name: str | None = None
+
+
+@router.post("/scan-code")
+def post_scan_code(body: ScanCodeRequest, db: sqlite3.Connection = Depends(_db_dependency)):
+    """Register a batch from live-scanned QR text, no image required."""
+    try:
+        batch, _diagnostics = scan_code_batch(
+            db,
+            code=body.code,
+            supplier_id_hint=body.supplier_id,
+            temperature_csv=body.temperature_csv,
+            physical_inspection_notes=body.physical_inspection_notes,
+            medicine_name_hint=body.medicine_name,
+        )
+    except InvalidCodeIntakeError:
+        raise HTTPException(status_code=422, detail="QR code has no readable batch number")
+    return _batch_to_response(batch)
 
 
 @router.get("/batches/{batch_id}")

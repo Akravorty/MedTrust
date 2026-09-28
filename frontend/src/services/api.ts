@@ -74,6 +74,23 @@ export interface IntakeResult {
   manual_review_reasons?: string[];
 }
 
+// POST /intake/scan-code (JSON). Registers a NEW batch straight from the
+// text a live camera scan decoded - no photo needed.
+export const scanCode = async (code: string): Promise<IntakeResult> => {
+  const res = await fetch(`${API_BASE}/intake/scan-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.detail || `Could not register this code (${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+};
+
 export const scanPack = async (file: File | Blob): Promise<IntakeResult> => {
   const form = new FormData();
   form.append('file', file, (file as File).name ?? 'pack.jpg');
