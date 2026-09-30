@@ -13,6 +13,10 @@
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/status-hackathon--build-orange)]()
 
+### 🎥 [Watch the Demo Video](https://youtu.be/Kx9ljEkXP_I)
+
+[![MediTrust Demo Video](https://img.youtube.com/vi/Kx9ljEkXP_I/hqdefault.jpg)](https://youtu.be/Kx9ljEkXP_I)
+
 [Overview](#-overview) • [Features](#-features) • [Screenshots](#-screenshots) • [Architecture](#-architecture) • [Quick Start](#-quick-start) • [API](#-api-reference) • [Testing](#-testing)
 
 </div>
